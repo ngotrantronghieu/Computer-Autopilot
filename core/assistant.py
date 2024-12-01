@@ -2,18 +2,33 @@ import customtkinter as Ctk
 import speech_recognition as sr
 import threading
 import keyboard
+import json
 from voice import speaker, set_volume, set_subtitles
 from driver import assistant, act, fast_act, auto_role, perform_simulated_keypress, write_action
 from window_focus import activate_window_title
 from utils import set_app_instance, print_to_chat
-from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key, current_llm_model, current_api_key_env_name, current_vision_llm_model, current_vision_api_key_env_name
+from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key
 
 # Initialize components
 Ctk.set_appearance_mode("system")
 Ctk.set_default_color_theme("blue")
 
+SETTINGS_FILE = "settings.json"
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            settings = json.load(f)
+            set_llm_model(settings.get("llm_model", ""))
+            set_api_key("", settings.get("api_key_env_name", ""))
+            set_vision_llm_model(settings.get("vision_llm_model", ""))
+            set_vision_api_key("", settings.get("vision_api_key_env_name", ""))
+    except FileNotFoundError:
+        pass
+
+
 class LLMSettingsWindow:
-    def __init__(self, parent):
+    def __init__(self, parent, llm_model, api_key_env_name, vision_llm_model, vision_api_key_env_name):
         self.parent = parent
         self.settings_window = Ctk.CTkToplevel(parent.root)
         self.settings_window.title("LLM Settings")
@@ -24,7 +39,7 @@ class LLMSettingsWindow:
         self.llm_model_label = Ctk.CTkLabel(self.settings_window, text="Main Model Name:")
         self.llm_model_label.pack(pady=(20, 5), padx=20)
         self.llm_model_entry = Ctk.CTkEntry(self.settings_window, width=200)
-        self.llm_model_entry.insert(0, current_llm_model)
+        self.llm_model_entry.insert(0, llm_model)
         self.llm_model_entry.pack(pady=5, padx=20)
         self.llm_model_entry.bind("<KeyRelease>", self.check_fields)
 
@@ -32,7 +47,7 @@ class LLMSettingsWindow:
         self.api_key_env_name_label = Ctk.CTkLabel(self.settings_window, text="API Key Env Name:")
         self.api_key_env_name_label.pack(pady=(10, 5), padx=20)
         self.api_key_env_name_entry = Ctk.CTkEntry(self.settings_window, width=200)
-        self.api_key_env_name_entry.insert(0, current_api_key_env_name)
+        self.api_key_env_name_entry.insert(0, api_key_env_name)
         self.api_key_env_name_entry.pack(pady=5, padx=20)
         self.api_key_env_name_entry.bind("<KeyRelease>", self.check_fields)
 
@@ -47,7 +62,7 @@ class LLMSettingsWindow:
         self.vision_llm_model_label = Ctk.CTkLabel(self.settings_window, text="Vision Model Name:")
         self.vision_llm_model_label.pack(pady=(20, 5), padx=20)
         self.vision_llm_model_entry = Ctk.CTkEntry(self.settings_window, width=200)
-        self.vision_llm_model_entry.insert(0, current_vision_llm_model)
+        self.vision_llm_model_entry.insert(0, vision_llm_model)
         self.vision_llm_model_entry.pack(pady=5, padx=20)
         self.vision_llm_model_entry.bind("<KeyRelease>", self.check_fields)
 
@@ -55,7 +70,7 @@ class LLMSettingsWindow:
         self.vision_api_key_env_name_label = Ctk.CTkLabel(self.settings_window, text="Vision API Key Env Name:")
         self.vision_api_key_env_name_label.pack(pady=(10, 5), padx=20)
         self.vision_api_key_env_name_entry = Ctk.CTkEntry(self.settings_window, width=200)
-        self.vision_api_key_env_name_entry.insert(0, current_vision_api_key_env_name)
+        self.vision_api_key_env_name_entry.insert(0, vision_api_key_env_name)
         self.vision_api_key_env_name_entry.pack(pady=5, padx=20)
         self.vision_api_key_env_name_entry.bind("<KeyRelease>", self.check_fields)
 
@@ -83,8 +98,17 @@ class LLMSettingsWindow:
         set_vision_llm_model(new_vision_model)
         set_vision_api_key(new_vision_api_key, new_vision_api_key_env_name)
 
+        settings = {
+            "llm_model": new_model,
+            "api_key_env_name": new_api_key_env_name,
+            "vision_llm_model": new_vision_model,
+            "vision_api_key_env_name": new_vision_api_key_env_name
+        }
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f)
+
         print_to_chat(f"LLM settings updated.")
-        self.settings_window.destroy()
+        self.settings_window.withdraw()
 
     def check_fields(self, event=None):
         if self.llm_model_entry.get() and self.api_key_env_name_entry.get() and self.vision_llm_model_entry.get() and self.vision_api_key_env_name_entry.get():
@@ -337,10 +361,17 @@ class ModernChatInterface:
         self.mini_chat.hide()
 
     def open_settings_window(self):
+        from core_api import current_llm_model, current_api_key_env_name, current_vision_llm_model, current_vision_api_key_env_name
         if self.settings_window is None or not self.settings_window.settings_window.winfo_exists():
-            self.settings_window = LLMSettingsWindow(self)
+            self.settings_window = LLMSettingsWindow(
+            self, 
+            current_llm_model, 
+            current_api_key_env_name, 
+            current_vision_llm_model, 
+            current_vision_api_key_env_name
+        )
         else:
-            self.settings_window.settings_window.lift()  # Bring the existing window to the front
+            self.settings_window.settings_window.deiconify()
 
     def add_message(self, message, is_user=True):
         # Create message bubble
@@ -499,6 +530,7 @@ class ModernChatInterface:
         set_subtitles(self.subtitles_var.get())
 
 def create_app():
+    load_settings()
     app = ModernChatInterface()
     set_app_instance(app)
     app.root.mainloop()

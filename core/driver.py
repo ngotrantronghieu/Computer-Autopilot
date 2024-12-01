@@ -199,7 +199,7 @@ def assistant(assistant_goal="", keep_in_mind="", assistant_identity="", app_nam
         if called_from == "assistant":
             print_to_chat(f"Called from: {called_from}")
         else:
-            print_to_chat(f"Prompt: \"{original_goal}\".")
+            # print_to_chat(f"Prompt: \"{original_goal}\".")
             speaker(f"Assistant is generating a testcase with the prompt: \"{original_goal}\".")
 
     # 'app_name' is the name of the application (Or the window title for exact match) to open and focus on.

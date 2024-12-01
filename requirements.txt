@@ -4,11 +4,11 @@ pyautogui
 pygetwindow
 customtkinter
 litellm
-Pillow  # This is the PIL (Python Imaging Library) package
+Pillow
 speechRecognition
 pywin32
 psutil
-ImageGrab  # Part of Pillow
+ImageGrab
 fuzzywuzzy
 pytesseract
 uiautomation

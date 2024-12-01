@@ -6,8 +6,11 @@ current_api_key_env_name = "GEMINI_API_KEY"
 current_vision_llm_model = "gemini/gemini-1.5-flash-002"
 current_vision_api_key_env_name = "GEMINI_API_KEY"
 
-def api_call(messages, model_name=current_llm_model, temperature=0.5, max_tokens=150):
+def api_call(messages, model_name=None, temperature=0.5, max_tokens=150):
     try:
+        # Use the global variable's current value if model_name is not provided
+        if model_name is None:
+            model_name = current_llm_model
         # Execute the chat completion using the chosen model
         response = litellm.completion(
             model=model_name,
