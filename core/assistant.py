@@ -7,7 +7,7 @@ from voice import speaker, set_volume, set_subtitles
 from driver import assistant, act, fast_act, auto_role, perform_simulated_keypress, write_action
 from window_focus import activate_window_title
 from utils import set_app_instance, print_to_chat
-from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key
+from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key, api_call
 
 # Initialize components
 Ctk.set_appearance_mode("system")
@@ -474,11 +474,20 @@ class ModernChatInterface:
                                 target=lambda: assistant(assistant_goal=message, called_from="chat")
                             )
                             assistant_thread.start()
-                        else:
+                        elif "action_performer" in response:
                             act_thread = threading.Thread(
                                 target=lambda: act(message)
                             )
                             act_thread.start()
+                        else:
+                            # Fetch a response from the LLM for joyful conversation
+                            joyful_response = api_call(
+                                [{"role": "user", "content": message}],
+                                temperature=0.7
+                            )
+                            if joyful_response:
+                                self.root.after(0, lambda: self.add_message(joyful_response, is_user=False))
+                                speaker(joyful_response)
                 if self.root.state() == 'iconic':
                     self.mini_chat.show()
                 self.root.after(0, self.mini_chat.hide_progress)

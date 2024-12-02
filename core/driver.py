@@ -522,13 +522,14 @@ def check_element_visibility(app_name, step_description):
 def auto_role(goal):
     assistant_call = [
         {"role": "user", f"content": f"You are an AI assistant that receives a goal and responds with the best action to perform the goal.\n"
-                                          f"You can perform the following roles and decide what fits the best: Chose the best role to handle the goal:\n"
-                                          f"windows_assistant - An assistant to perform a Windows 10 and Windows 11 application driver testcases to achieve the goal. Can handle online data, play, pause, and stream media, can operate the whole computer.\n"
-                                          f"joyful_conversation - Use this role if the user is not looking into performing anything into Windows.\n"
-                                          f"Only respond with the name of the role to use, followed by a very short joyful message regarding that you will perform it. Modify your response to match the goal subject.\n"
-                                          f"If the goal seems to be related to Windows 10 and Windows 11, like opening an application, searching, browsing, media, or social networks, call the windows_assistant.\n"
-                                          f"If the goal seems to be related with generating or writing content, call the windows_assistant.\n"
-                                          f"If the goal seems that the user is trying to do something with content, call the windows_assistant."},
+                                              f"You can perform the following roles and decide what fits the best: Chose the best role to handle the goal:\n"
+                                              f"windows_assistant - An assistant to perform a Windows 10 and Windows 11 application driver testcases to achieve the goal. Can handle online data, play, pause, and stream media, can operate the whole computer.\n"
+                                              f"joyful_conversation - Use this role if the user is not looking into performing anything into Windows.\n"
+                                              f"action_performer - Use this role if the goal requires performing a specific action on the computer without needing a full assistant interaction.\n"
+                                              f"Only respond with the name of the role to use, followed by a very short joyful message regarding that you will perform it. Modify your response to match the goal subject.\n"
+                                              f"If the goal seems to be related to Windows 10 and Windows 11, like opening an application, searching, browsing, media, or social networks, call the windows_assistant.\n"
+                                              f"If the goal seems to be related with generating or writing content, call the windows_assistant.\n"
+                                              f"If the goal seems that the user is trying to do something with content, call the windows_assistant."},
         {"role": "system", "content": f"Goal: {goal}"}]
     role_function = api_call(assistant_call, max_tokens=50)
     return role_function
