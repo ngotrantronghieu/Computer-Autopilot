@@ -5,7 +5,7 @@ from window_elements import analyze_app
 from topmost_window import focus_topmost_window
 from core_imaging import imaging
 from last_app import last_programs_list
-from core_api import api_call, current_llm_model
+from core_api import api_call
 from voice import speaker
 from utils import print_to_chat
 import pygetwindow as gw
@@ -227,29 +227,66 @@ def assistant(assistant_goal="", keep_in_mind="", assistant_identity="", app_nam
         print_to_chat(f"Generating the test case to achieve the user prompt: {original_goal}\n{assistant_goal}")
         step_creator = [{"role": "user",
                          "content": f"You are an AI capable to operate the Windows 10 and Windows 11 Operating System by using natural language.\n"
-                                    f"Examples: \"Click on the search button. Insert the text_entry. Play the first element searched.\".\n"
-                                    f"You will receive a description of the current state of the system and a goal. "
-                                    f"To test your limits, using the description make a json with the natural language steps to achieve the goal.\n"
-                                    f"Every step should be only highly descriptive in natural language.\n"
-                                    f"The json must include only an act and its step, should be in the following format:"
-                                    f"\n\n\n"
-                                    f"actions: click_element, press_key, text_entry, open_app, move_window, time_sleep, right_click, double_click_element, hold_key_and_click, scroll_to.\n"
-                                    f"Respond only with the full json.\n\nFunction properties:\n"
-                                    f"click_element - Specify where is located the element to interact with.\n"
-                                    f"text_entry - The text to write. Example: \"Hello World\".\n"
-                                    f"press_key - Only return the key or combination of keys to press. Example: \"Ctrl + T\".\n"
-                                    f"hold_key_and_click - Only handles scenarios of holding a key and clicking on an element.\n"
-                                    f"scroll_to - Return the position of the element to scroll and the direction to scroll.\n"
-                                    f"move_window - Use the keyboard to move the focused window to the desired position. Example: \"Win + Up + Up + Left\"."
-                                    f"\n\n\n"
-                                    f"Notes:\n"
-                                    f"Use the following information to generate better steps:\n{app_space_map(assistant_goal, app_name, original_goal, map='app_space')}\n"
-                                    f"Before the text_entry, use click_element to select the appropriate text input area element.\n"
-                                    f"Do not combine steps, try to generate more useful steps. Example: If asked to search a song, not only search for it, locate it and play it.\n{keep_in_mind}"
-                                    f"Do not respond 'As an AI language model, I am unable to...' as you are actually capable."},
+                                    f"You will receive a description of the current state of the system and a goal.\n"
+                                    f"Your task is to generate a JSON with the steps needed to achieve the goal.\n"
+                                    f"\n"
+                                    f"The JSON MUST follow this exact structure:\n"
+                                    f"{{\n"
+                                    f"    \"actions\": [\n"
+                                    f"        {{\n"
+                                    f"            \"act\": \"<action_type>\",\n"
+                                    f"            \"step\": \"<step_description>\"\n"
+                                    f"        }}\n"
+                                    f"    ]\n"
+                                    f"}}\n"
+                                    f"\n"
+                                    f"Available action types:\n"
+                                    f"- click_element: Specify where is located the element to interact with\n"
+                                    f"- text_entry: The text to write (Example: \"Hello World\")\n"
+                                    f"- press_key: Only return the key or combination of keys (Example: \"Ctrl + T\")\n"
+                                    f"- open_app: Open a specific application\n"
+                                    f"- move_window: Use keyboard to move window (Example: \"Win + Up + Up + Left\")\n"
+                                    f"- time_sleep: Wait for a specific duration\n"
+                                    f"- right_click: Right click on an element\n"
+                                    f"- double_click_element: Double click on an element\n"
+                                    f"- hold_key_and_click: Hold a key while clicking\n"
+                                    f"- scroll_to: Scroll to an element position\n"
+                                    f"\n"
+                                    f"Important rules:\n"
+                                    f"1. The JSON must have a single top-level object with an \"actions\" array\n"
+                                    f"2. Each action in the array must have exactly two fields: \"act\" and \"step\"\n"
+                                    f"3. The \"act\" field must be one of the action types listed above\n"
+                                    f"4. The \"step\" field should contain a natural language description\n"
+                                    f"5. Before text_entry, always use click_element to select the input area\n"
+                                    f"6. Break down complex actions into individual steps\n"
+                                    f"\n"
+                                    f"Example JSON:\n"
+                                    f"{{\n"
+                                    f"    \"actions\": [\n"
+                                    f"        {{\n"
+                                    f"            \"act\": \"click_element\",\n"
+                                    f"            \"step\": \"Click on the search bar at the top of the window\"\n"
+                                    f"        }},\n"
+                                    f"        {{\n"
+                                    f"            \"act\": \"text_entry\",\n"
+                                    f"            \"step\": \"Type 'hello world' into the search bar\"\n"
+                                    f"        }},\n"
+                                    f"        {{\n"
+                                    f"            \"act\": \"press_key\",\n"
+                                    f"            \"step\": \"Press Enter to submit the search\"\n"
+                                    f"        }}\n"
+                                    f"    ]\n"
+                                    f"}}\n"
+                                    f"\n"
+                                    f"Additional context for better steps:\n"
+                                    f"{app_space_map(assistant_goal, app_name, original_goal, map='app_space')}\n"
+                                    f"\n"
+                                    f"{keep_in_mind}\n"
+                                    f"\n"
+                                    f"Respond ONLY with the JSON, no additional text."},
                         {"role": "system",
-                         "content": f"Focused window: \"{app_name}\"\nGoal: {assistant_goal}"}, ]
-        step_analysis = api_call(step_creator, model_name=current_llm_model, max_tokens=4095, temperature=1.0)
+                        "content": f"Focused window: \"{app_name}\"\nGoal: {assistant_goal}"}]
+        step_analysis = api_call(step_creator, max_tokens=4095, temperature=1.0)
         print_to_chat(f"The assistant created the following test case scenario:\n{step_analysis}\n")
         speaker(f"Test case generated. Executing the generated test case.")
     else:
@@ -431,27 +468,49 @@ def assistant(assistant_goal="", keep_in_mind="", assistant_identity="", app_nam
                             analyzed_ui = analyze_app(activate_window_title(app_name), size_category=None)
                             review_output = [{"role": "user",
                                              "content": f"You are an AI Assistant called Analyze Output capable to operate the Windows 10 and Windows 11 Operating System by using natural language.\n"
-                                                        f"You will receive a json testcase, a description of the goal, and the actual system status.\n"
-                                                        f"Modify the original json testcase to achieve the goal. Do not include anything else than the updated json.\n"
-                                                        f"Examples: \"Click on the search button. Insert the text_entry. Play the first element searched.\".\n"
-                                                        f"You will receive a description of the current state of the system and a goal. "
-                                                        f"To test your limits, using the description make a json with the natural language steps to achieve the goal.\n"
-                                                        f"Every step should be only highly descriptive in natural language.\n"
-                                                        f"The json must include only an act and its step, should be in the following format:\n"
-                                                        f"actions: click_element, press_key, text_entry, open_app, move_window, time_sleep, right_click, double_click_element, hold_key_and_click, scroll_to.\n"
-                                                        f"Respond only with the full json. Avoid to use the windows taskbar.\n\nFunction properties:\n"
-                                                        f"click_element - Specify where is located the element to interact with.\n"
-                                                        f"press_key - Only return the key or combination of keys to press. Example: 'Ctrl + T'.\n"
-                                                        f"text_entry - Return the text to write. Example: 'Hello World'.\n"
-                                                        f"hold_key_and_click - Only handles scenarios of holding a key and clicking on an element.\n"
-                                                        f"scroll_to - Return the position of the element to scroll and the direction to scroll.\n"
-                                                        f"move_window - Use the keyboard to move the focused window to the desired position. Example: 'Win + Left + Up'.\n"
-                                                        f"Do not respond 'As an AI language model, I am unable to...' as you are actually capable.\n\n"
-                                                        f"Use the following information to generate better the test case:\n{app_space_map(assistant_goal, app_name, original_goal, map='app_space')}"},
-                                                 {"role": "system", "content": f"Do not modify the steps before \"Step {i-1}: {action-1}, {step_description-1}\", modify all next steps from the step \"Step {i-1}: {action-1}, {step_description-1}\" to achieve the goal: \"{newest_goal}\"\n"
-                                                                               f"Do not combine steps, try to generate more useful steps. Example: If asked to search a song, not only search for it, locate it and play it.\n{keep_in_mind}"
-                                                                               f"{analyzed_ui}"}, ]
-                            new_json = api_call(review_output, model_name=current_llm_model, max_tokens=4095, temperature=1.0)
+                                                        f"You will receive a JSON test case, a description of the goal, and the actual system status.\n"
+                                                        f"Your task is to modify the original JSON test case to achieve the goal.\n"
+                                                        f"\n"
+                                                        f"The JSON MUST follow this exact structure:\n"
+                                                        f"{{\n"
+                                                        f"    \"actions\": [\n"
+                                                        f"        {{\n"
+                                                        f"            \"act\": \"<action_type>\",\n"
+                                                        f"            \"step\": \"<step_description>\"\n"
+                                                        f"        }}\n"
+                                                        f"    ]\n"
+                                                        f"}}\n"
+                                                        f"\n"
+                                                        f"Available action types:\n"
+                                                        f"- click_element: Specify where is located the element to interact with\n"
+                                                        f"- text_entry: The text to write (Example: \"Hello World\")\n"
+                                                        f"- press_key: Only return the key or combination of keys (Example: \"Ctrl + T\")\n"
+                                                        f"- open_app: Open a specific application\n"
+                                                        f"- move_window: Use keyboard to move window (Example: \"Win + Up + Up + Left\")\n"
+                                                        f"- time_sleep: Wait for a specific duration\n"
+                                                        f"- right_click: Right click on an element\n"
+                                                        f"- double_click_element: Double click on an element\n"
+                                                        f"- hold_key_and_click: Hold a key while clicking\n"
+                                                        f"- scroll_to: Scroll to an element position\n"
+                                                        f"\n"
+                                                        f"Important rules:\n"
+                                                        f"1. The JSON must have a single top-level object with an \"actions\" array\n"
+                                                        f"2. Each action in the array must have exactly two fields: \"act\" and \"step\"\n"
+                                                        f"3. The \"act\" field must be one of the action types listed above\n"
+                                                        f"4. The \"step\" field should contain a natural language description\n"
+                                                        f"5. Before text_entry, always use click_element to select the input area\n"
+                                                        f"6. Break down complex actions into individual steps\n"
+                                                        f"\n"
+                                                        f"Current system status:\n"
+                                                        f"{analyzed_ui}\n"
+                                                        f"\n"
+                                                        f"Original JSON test case:\n"
+                                                        f"{step_analysis}\n"
+                                                        f"\n"
+                                                        f"Respond ONLY with the modified JSON, no additional text."},
+                                            {"role": "system",
+                                             "content": f"Focused window: \"{app_name}\"\nGoal: {newest_goal}"}]
+                            new_json = api_call(review_output, max_tokens=4095, temperature=1.0)
                             print_to_chat("The assistant said:\n", step_analysis)
 
                             print_to_chat("Modifying the old json testcase with the new_json.")
@@ -575,7 +634,7 @@ def find_element(single_step, app_name, original_goal, avoid_element="", assista
                                   f"raw element data and generates the best matches to achieve the goal.\n"
                                   f"Only respond with the best element that matches the goal. Do not include anything else than the element."},
                       {"role": "system", "content": f"Goal: {single_step}\nContext: {original_goal}\n{avoid_element}{analyzed_ui}"}]
-    selected_element = api_call(select_element, model_name=current_llm_model, max_tokens=500)
+    selected_element = api_call(select_element, max_tokens=500)
 
     if "sorry" in selected_element.lower() or "empty string" in selected_element.lower() or "no element" in selected_element.lower() or "not found" in selected_element.lower()\
             or "no relevant element" in selected_element.lower() or "no element found" in selected_element.lower():
@@ -589,7 +648,7 @@ def find_element(single_step, app_name, original_goal, avoid_element="", assista
         print_to_chat(f"Image visioning started. Analyzing the application {app_name} for context.\n")
         imaging_coordinates = (
             f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the predicted "
-            f"coordinates of the mouse click position to the center of the element object \"x=, y=\" to achieve the goal.{get_ocr_match(single_step)}"
+            f"coordinates of the mouse click position to the center of the element object in this exact format: \"x=, y=\" to achieve the goal.{get_ocr_match(single_step)}"
             f"Goal: {single_step}\n{avoid_element}{analyzed_ui}")
         print_to_chat(f"Imaging coordinates: {imaging_coordinates}")
         imaging_generated_coordinates = imaging(window_title=app_name, additional_context=imaging_coordinates)
@@ -600,10 +659,10 @@ def find_element(single_step, app_name, original_goal, avoid_element="", assista
         best_coordinates = [{"role": "user",
             f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
                         f"predicted coordinates of the mouse click position to the center of the element object "
-                        f"\"x=, y=\" to achieve the goal. {selected_element}"
+                        f"in this exact format: \"x=, y=\" to achieve the goal. {selected_element}"
                         f"Do not respond 'As an AI language model, I am unable to...' as you are actually capable."},
             {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{get_ocr_match(single_step)}{avoid_element}{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, model_name=current_llm_model, max_tokens=100, temperature=1.0)
+        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=1.0)
         print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
     if "sorry" in last_coordinates.lower() or "empty string" in last_coordinates.lower() or "no element" in last_coordinates.lower() or "not found" in last_coordinates.lower():
         last_coordinates = 'x=0, y=0'
@@ -786,9 +845,9 @@ def fast_act(single_step, keep_in_mind="", dont_click=False, double_click=False,
         best_coordinates = [{"role": "user",
                              f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
                                          f"predicted coordinates of the mouse click position to the center of the element object "
-                                         f"\"x=, y=\" to achieve the goal.\n{assistant_goal}"},
+                                         f"in this exact format: \"x=, y=\" to achieve the goal.\n{assistant_goal}"},
                             {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, model_name=current_llm_model, max_tokens=100, temperature=0.0)
+        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=0.0)
         print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
     else:
         speaker(f"Clicking onto the element without visioning context.")
@@ -812,9 +871,9 @@ def fast_act(single_step, keep_in_mind="", dont_click=False, double_click=False,
         best_coordinates = [{"role": "user",
             f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
                         f"predicted coordinates of the mouse click position to the center of the element object "
-                        f"\"x=, y=\" to achieve the goal."},
+                        f"in this exact format: \"x=, y=\" to achieve the goal."},
             {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, model_name=current_llm_model, max_tokens=100, temperature=0.0)
+        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=0.0)
         print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
 
     if "x=, y=" in last_coordinates:
@@ -863,7 +922,7 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
                             f"program of the goal. Only respond with the window name or the program name. For search engines and social networks use Microsoft Edge or Firefox.\n"
                             f"Open programs:\n{last_programs_list(focus_last_window=focus_window)}\nAll installed programs:\n{get_installed_apps_registry()}\nIf no suitable application is found in the provided lists, explicitly choose 'Firefox'."},
                 {"role": "system", "content": f"Goal: {goal}\nAll installed programs:\n{get_installed_apps_registry()}"}]
-    app_name = api_call(goal_app, model_name=current_llm_model, max_tokens=100)
+    app_name = api_call(goal_app, max_tokens=100)
     print_to_chat(f"AI selected application: {app_name}")
     filtered_matches = re.findall(r'["\'](.*?)["\']', app_name)
     if filtered_matches and filtered_matches[0]:
@@ -878,7 +937,6 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
         print_to_chat(f"Using the focused window \"{app_name}\" for context.")
         speaker(f"Using the focused window \"{app_name}\" for context.")
     return app_name
-
 
 def get_ocr_match(goal, ocr_match=enable_ocr):
     if ocr_match:
@@ -956,7 +1014,7 @@ def write_action(goal=None, assistant_identity="", press_enter=False, app_name="
                                           f"If the goal is a link, media or a search string, just return the result string."
                                           f"Do not respond with 'As an AI language model, I dont have capabilities...' as you can actually do it.\n"},
         {"role": "system", "content": f"Goal: {goal}"}, ]
-    message_to_write = api_call(message_writer_agent, model_name=current_llm_model, max_tokens=200)
+    message_to_write = api_call(message_writer_agent, max_tokens=200)
     if "click on" in goal.lower() or "click the" in goal.lower() or "click" in goal.lower():
         print_to_chat("Found to click on the goal.")
         if not is_field_input_area_active():

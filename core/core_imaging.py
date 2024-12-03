@@ -5,7 +5,6 @@ import io
 from PIL import Image
 import os
 import litellm
-from core_api import current_vision_llm_model, current_vision_api_key_env_name
 
 # Function to focus a window given its title
 def focus_window(window_title):
@@ -39,6 +38,8 @@ def encode_image(image_data):
 
 # Function to analyze an image using LiteLLM
 def analyze_image(base64_image, window_title, additional_context='What’s in this image?'):
+    from core_api import current_vision_llm_model, current_vision_api_key_env_name
+    
     prompt = additional_context
     image_url = f"data:image/png;base64,{base64_image}"
 
