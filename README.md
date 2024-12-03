@@ -1,6 +1,10 @@
 # Computer Autopilot
 Computer Autopilot is an AI Agent capable of automating windows using natural languages. It can automate any task with windows user interface using test case generation and visual context analysis with the help of large language models. It has built-in assistance options to improve human utilization of a computer, with a new technical approach to User Interface and User Experience assistance and testing, generalizes correctly any natural language prompt, and plans to perform correct actions into the OS with security in mind.
 
+<img src="https://github.com/user-attachments/assets/0e64a0f5-6a82-4c17-b518-6f0bf18eb915" alt="Main Chat Interface" width="700"/>
+
+![Mini Chat Interface](https://github.com/user-attachments/assets/7a321b3b-bb93-4f71-b8cd-ff6be39ab2fd)
+
 # Overview
 Chat and talk to your computer friendly and naturally to perform any User Interface activity.
 Use natural language to operate freely your Windows Operating System.
@@ -44,7 +48,7 @@ cd .\core
 python ./assistant.py
 
 # Go to https://docs.litellm.ai/docs/providers to get the LLM Model Name.
-# Add your LLM Model, LLM Vision Model and API Keys in the app settings and you're good to go.
+# Set your LLM Model, LLM Vision Model and API Keys in the app settings and you're good to go.
 # If you don't want to enter your API Keys in the Settings, you can set the API Keys as Environment Variables and enter the Environment Variables name in the API Key Env Name fields.
 ```
 
