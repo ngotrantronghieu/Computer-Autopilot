@@ -1,7 +1,7 @@
 # Computer Autopilot
 Computer Autopilot is an AI Agent capable of automating windows using natural languages. It can automate any task with windows user interface using test case generation and visual context analysis with the help of large language models. It has built-in assistance options to improve human utilization of a computer, with a new technical approach to User Interface and User Experience assistance and testing, generalizes correctly any natural language prompt, and plans to perform correct actions into the OS with security in mind.
 
-<img src="https://github.com/user-attachments/assets/0e64a0f5-6a82-4c17-b518-6f0bf18eb915" alt="Main Chat Interface" width="700"/>
+<img src="https://github.com/user-attachments/assets/0e64a0f5-6a82-4c17-b518-6f0bf18eb915" alt="Main Chat Interface" width="700" style="display: block; margin: 0 auto"/>
 
 ![Mini Chat Interface](https://github.com/user-attachments/assets/7a321b3b-bb93-4f71-b8cd-ff6be39ab2fd)
 
