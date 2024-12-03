@@ -48,7 +48,7 @@ cd .\core
 python ./assistant.py
 
 # Go to https://docs.litellm.ai/docs/providers to get the LLM Model Name.
-# Add your LLM Model, LLM Vision Model and API Keys in the app settings and you're good to go.
+# Set your LLM Model, LLM Vision Model and API Keys in the app settings and you're good to go.
 # If you don't want to enter your API Keys in the Settings, you can set the API Keys as Environment Variables and enter the Environment Variables name in the API Key Env Name fields.
 ```
 
