@@ -30,38 +30,19 @@ class TransparentSubtitlesWindow:
         self.update()
 
     def update(self):
-        try:
-            if self.root.winfo_exists():
-                self.label.configure(text=self.text)
-                self.root.update_idletasks()
-                self.root.update()
-        except tk.TclError:
-            pass  # Window was destroyed
+        self.label.configure(text=self.text)
+        self.root.update_idletasks()
+        self.root.update()
 
     def change_text(self, new_text, duration):
-        try:
-            if self.root.winfo_exists():
-                self.text = new_text
-                self.update()
-                # Schedule removing the text after the duration
-                self.root.after(duration, self.clear_text)
-        except tk.TclError:
-            pass  # Window was destroyed
+        self.text = new_text
+        self.update()
 
-    def clear_text(self):
-        try:
-            if self.root.winfo_exists():
-                self.label.configure(text="")
-        except tk.TclError:
-            pass  # Window was destroyed
+        # Schedule removing the text after the duration
+        self.root.after(duration, lambda: self.label.configure(text=""))
 
     def close(self):
-        try:
-            if self.root.winfo_exists():
-                self.root.quit()
-                self.root.destroy()
-        except tk.TclError:
-            pass  # Window was already destroyed
+        self.root.quit()  # changed from destroy() to quit()
 
 
 def calculate_duration_of_speech(text, lang='en', wpm=150):
