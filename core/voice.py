@@ -42,7 +42,7 @@ class TransparentSubtitlesWindow:
         self.root.after(duration, lambda: self.label.configure(text=""))
 
     def close(self):
-        self.root.quit()  # changed from destroy() to quit()
+        self.root.quit()
 
 
 def calculate_duration_of_speech(text, lang='en', wpm=150):
