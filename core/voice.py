@@ -51,7 +51,7 @@ class TransparentSubtitlesWindow:
         self.root.quit()
 
 def calculate_duration_of_speech(text, lang='en', wpm=150):
-    """Estimate the duration the subtitles should be displayed based on words per minute (WPM)"""
+    # Estimate the duration the subtitles should be displayed based on words per minute (WPM)
     words = text.split()
     word_count = len(words)
     duration_in_seconds = (word_count / wpm) * 60
