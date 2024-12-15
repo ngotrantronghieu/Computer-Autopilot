@@ -1,9 +1,9 @@
 import os
 import litellm
 
-current_llm_model = "gemini/gemini-1.5-flash-002"
+current_llm_model = "gemini/gemini-1.5-flash"
 current_api_key_env_name = "GEMINI_API_KEY"
-current_vision_llm_model = "gemini/gemini-1.5-flash-002"
+current_vision_llm_model = "gemini/gemini-1.5-flash"
 current_vision_api_key_env_name = "GEMINI_API_KEY"
 
 def api_call(messages, model_name=None, temperature=0.5, max_tokens=150):
