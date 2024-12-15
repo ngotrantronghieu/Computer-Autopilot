@@ -4,7 +4,7 @@ import threading
 import keyboard
 import json
 from voice import speaker, set_volume, set_subtitles
-from driver import assistant, act, fast_act, auto_role, perform_simulated_keypress, write_action
+from driver import assistant, fast_act, auto_role, perform_simulated_keypress, write_action
 from window_focus import activate_window_title
 from utils import set_app_instance, print_to_chat
 from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key, api_call
@@ -474,11 +474,6 @@ class ModernChatInterface:
                                 target=lambda: assistant(assistant_goal=message, called_from="chat")
                             )
                             assistant_thread.start()
-                        elif "action_performer" in response:
-                            act_thread = threading.Thread(
-                                target=lambda: act(message)
-                            )
-                            act_thread.start()
                         else:
                             # Fetch a response from the LLM for joyful conversation
                             joyful_response = api_call(
