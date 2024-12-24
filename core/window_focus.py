@@ -88,7 +88,7 @@ def get_window_text(hwnd):
 
 
 def get_active_window_title():
-    time.sleep(1) # Wait for the window to be fully active ToDo: Fix this part!
+    time.sleep(1) # Wait for the window to be fully active
     hwnd = GetForegroundWindow()
     return get_window_text(hwnd)
 
