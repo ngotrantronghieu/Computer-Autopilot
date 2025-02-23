@@ -2,9 +2,9 @@ import pyautogui
 import pygetwindow as gw
 import base64
 import io
-from PIL import Image
 import os
 import litellm
+from PIL import Image
 
 # Function to focus a window given its title
 def focus_window(window_title):
@@ -92,7 +92,7 @@ def imaging(window_title=None, additional_context=None, x=None, y=None, screensh
     screenshot = capture_screenshot(window, region)
 
     # Optionally, paste the cursor onto the screenshot, adjusting for the offset if a region is specified
-    cursor_img_path = r'core\media\Mouse_pointer_small.png'
+    cursor_img_path = r'media\Mouse_pointer_small.png'
     with Image.open(cursor_img_path) as cursor:
         cursor = cursor.convert("RGBA")  # Ensure cursor image has an alpha channel for transparency
 

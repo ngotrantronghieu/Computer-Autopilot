@@ -1,0 +1,78 @@
+{
+  "twitter": {
+    "new_thread": [
+      "Click on the 'What is happening?!' text input area field to initiate a new post thread; data-testid='tweetTextarea_0_label'.",
+      "Write the post in the 'What is happening?!' text area input field, make sure it is less than 280 characters.",
+      "Click on the 'Post' button to post the new post thread; data-testid='tweetButtonInline'."
+    ],
+    "comment": [
+      "Scroll to the comments section, click on the 'Post your reply' text input area field below the Twitter post.",
+      "Write the comment in the 'Post your reply' text input area field, make sure it is less than 280 characters.",
+      "Click on the 'Reply' button to post the comment."
+    ]
+  },
+  "youtube": {
+    "like": [
+      "Click on the 'Like' button button below the title."
+    ],
+    "dislike": [
+      "Click on the 'I dislike this' button known as the 'Dislike' button."
+    ],
+    "comment": [
+      "Click on the title of the video, then scroll to the 'Add a comment...' section, then click on the 'Add a comment...' (ID: contenteditable) text input area to begin write the comment, then click on the 'Comment' button to post the comment."
+    ],
+    "subscribe": [
+      "Click on the 'Subscribe' button below the video."
+    ]
+  },
+  "spotify": {
+    "play": [
+      "To play a song after searching it on spotify, double click on the song in the search result."
+    ]
+  },
+  "firefox": {
+    "search": [
+      "The default search engine is Google so when you open a new tab or window, you can search directly on Google."
+    ]
+  },
+  "chrome": {
+    "search": [
+      "The default search engine is Google so when you open a new tab or window, you can search directly on Google."
+    ]
+  },
+  "edge": {
+    "search": [
+      "The default search engine is Google so when you open a new tab or window, you can search directly on Google."
+    ]
+  },
+  "keyboard_shortcuts": {
+    "firefox": [
+      "To open a new window, use the keyboard shortcut: Ctrl + N.",
+      "To open a new tab, use the keyboard shortcut: Ctrl + T.",
+      "To open a new private window, use the keyboard shortcut: Ctrl + Shift + N.",
+      "To open a new private tab, use the keyboard shortcut: Ctrl + Shift + T.",
+      "To close a tab, use the keyboard shortcut: Ctrl + W.",
+      "To focus on the search bar, use the keyboard shortcut: Ctrl + L."
+    ],
+    "chrome": [
+      "To open a new window, use the keyboard shortcut: Ctrl + N.",
+      "To open a new tab, use the keyboard shortcut: Ctrl + T.",
+      "To open a new private window, use the keyboard shortcut: Ctrl + Shift + N.",
+      "To open a new private tab, use the keyboard shortcut: Ctrl + Shift + T.",
+      "To close a tab, use the keyboard shortcut: Ctrl + W.",
+      "To focus on the search bar, use the keyboard shortcut: Ctrl + L."
+    ],
+    "edge": [
+      "To open a new window, use the keyboard shortcut: Ctrl + N.",
+      "To open a new tab, use the keyboard shortcut: Ctrl + T.",
+      "To open a new private window, use the keyboard shortcut: Ctrl + Shift + N.",
+      "To open a new private tab, use the keyboard shortcut: Ctrl + Shift + T.",
+      "To close a tab, use the keyboard shortcut: Ctrl + W.",
+      "To focus on the search bar, use the keyboard shortcut: Ctrl + L."
+    ],
+    "telegram": [
+      "Press 'esc' to exit the current conversation.",
+      "Press 'esc' twice to go to 'All chats'."
+    ]
+  }
+}

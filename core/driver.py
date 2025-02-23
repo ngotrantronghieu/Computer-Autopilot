@@ -1,6 +1,16 @@
+import pygetwindow as gw
+import win32process
+import win32gui
+import pyautogui
+import sqlite3
+import psutil
+import json5 as json
+import time
+import re
+import warnings
+import subprocess
 from window_focus import activate_window_title, get_installed_apps_registry
 from mouse_detection import get_cursor_shape
-from ocr import find_probable_click_position
 from window_elements import analyze_app
 from topmost_window import focus_topmost_window
 from core_imaging import imaging
@@ -8,785 +18,177 @@ from last_app import last_programs_list
 from core_api import api_call
 from voice import speaker
 from utils import print_to_chat
-import pygetwindow as gw
-import win32process
-import win32gui
-import pyautogui
-import sqlite3
-import psutil
-import random
-import json
-import time
-import re
-import warnings
-warnings.simplefilter("ignore", UserWarning)
 from pywinauto import Application
+from tasks import load_tasks, get_task
+warnings.simplefilter("ignore", UserWarning)
 
-low_data_mode = True
 enable_semantic_router_map = True
-enable_ocr = False
-visioning_context = True
+_stop_requested = False
+action_cache = {}
 
-if low_data_mode is True:
-    visioning_match = False
-    rescan_element_match = False
-else:
-    visioning_match = True
-    rescan_element_match = True
+def request_stop():
+    global _stop_requested
+    _stop_requested = True
 
-# Example test case to be used for testing
-json_case_example = r'''```json
-    {
-      "actions": [
-        {
-          "act": "press_key",
-          "step": "Ctrl + T"
-        },
-        {
-          "act": "text_entry",
-          "step": "reddit.com"
-        },
-        {
-          "act": "press_key",
-          "step": "Enter"
-        },
-        {
-          "act": "open_app",
-          "step": "Microsoft Edge"
-        },
-        {
-          "act": "press_key",
-          "step": "Ctrl + N"
-        },
-        {
-          "act": "text_entry",
-          "step": "tiktok.com"
-        },
-        {
-          "act": "press_key",
-          "step": "Enter"
-        },
-        {
-          "act": "move_window",
-          "step": "Win + Right + Up"
-        },
-        {
-          "act": "open_app",
-          "step": "Microsoft Edge"
-        },
-        {
-          "act": "press_key",
-          "step": "Ctrl + N"
-        },
-        {
-          "act": "text_entry",
-          "step": "netflix.com"
-        },
-        {
-          "act": "press_key",
-          "step": "Enter"
-        },
-        {
-          "act": "move_window",
-          "step": "Win + Left + Up"
-        },
-        {
-          "act": "open_app",
-          "step": "Microsoft Edge"
-        },
-        {
-          "act": "move_window",
-          "step": "Win + Right + Down"
-        }
-      ]
-    }```'''
+def clear_stop():
+    global _stop_requested
+    _stop_requested = False
 
-# Application space map to provide context for AI
-def app_space_map(goal, app_name=None, single_step=None, map=''):
-    if 'app_space' in map:
-        if enable_semantic_router_map is True:
-            # Control elements map:
-            if "twitter" in goal.lower() or "twitter" in app_name.lower():
-                element_map = r'''```
-To make a new thread post in X formerly known as Twitter and post it:
-The user is already logged in Twitter, do not log in again.
-Click on the 'What is happening?!' text input area field to initiate a new post thread; data-testid='tweetTextarea_0_label'.
-Write the post in the 'What is happening?!' text area input field, make sure it is less than 280 characters.
-Click on the 'Post' button to post the new post thread; data-testid='tweetButtonInline'.
+def is_stop_requested():
+    return _stop_requested
 
-To make a comment on a post from X formerly known as Twitter and reply it:
-The user is already logged in Twitter, do not log in again.
-Scroll to the comments section, click on the 'Post your reply' text input area field below the Twitter post.
-Write the comment in the 'Post your reply' text input area field, make sure it is less than 280 characters.
-Click on the 'Reply' button to post the comment.
-```'''
-            elif "youtube" in goal.lower() or "youtube" in app_name.lower():
-                element_map = r'''```
-To like a video on youtube: Click on the 'Like' button button below the title.
+def auto_role(message):
+    assistant_call = [{
+        "role": "user", 
+        "content": (
+            "You are an AI assistant that receives a message from the user and responds with the best role related to the message.\n"
+            "You can choose between the following roles and decide what fits the best:\n"
+            "windows_assistant - An assistant that can perform Windows application driver testcases to achieve a goal. It can handle online data, play, pause, stream media or operate the whole computer.\n"
+            "joyful_conversation - Use this role if the user isn't looking for performing anything on Windows.\n"
+            "Only respond with the name of the role to use. Modify your response to match the message subject.\n"
+            "If the message seems to be related to Windows, like opening an application, searching, browsing, media, or social networks, choose windows_assistant.\n"
+            "If the message seems to be related with generating or writing content, choose windows_assistant.\n"
+            "If the message seems that the user is trying to do something with content, choose windows_assistant.\n"
+            "Otherwise, if the user is just asking question or having conversation, choose joyful_conversation."
+        )
+    }, {
+        "role": "system", 
+        "content": f"Message: {message}"
+    }]
+    
+    return api_call(assistant_call, max_tokens=50)
 
-To dislike a video: Click on the 'I dislike this' button known as the 'Dislike' button.
+def app_space_map(map='', app_space_filepath="app_space_map.json"):
+    """Get application space mapping for context and shortcuts."""
+    try:
+        with open(app_space_filepath, "r") as f:
+            app_space_data = json.load(f)
+    except FileNotFoundError:
+        print_to_chat(f"Warning: App space file not found at {app_space_filepath}. Using default map.")
+        app_space_data = {}
+    except json.JSONDecodeError:
+        print_to_chat(f"Error: Invalid JSON format in {app_space_filepath}. Using default map.")
+        app_space_data = {}
 
-To make a comment: Click on the title of the video, then scroll to the 'Add a comment...' section, then click on the 'Add a comment...' (ID: contenteditable) text input area to begin write the comment, then click on the 'Comment' button to post the comment.
-    ```'''
-            else:
-                element_map = None  # No element selected.
-            if element_map:
-                select_element = [
-                    {"role": "user",
-                     "content": f"Only return the text related to the final goal.\n"
-                                 f"Do not respond anything else than the selected lines from the list. Do not modify the list.\n"
-                                 f"Goal: {goal}"},
-                    {"role": "system", "content": f"List:\n{element_map}\n\n\nStep: {single_step}\nGoal: {goal}"}]
-                ai_element_map = api_call(select_element, max_tokens=300)
-                if "sorry" in ai_element_map.lower() or "empty string" in ai_element_map.lower():
-                    ai_element_map = ""
-                # ai_element_map = element_map
-            else:
-                ai_element_map = ""
-            print_to_chat(f"\nApp space map: {ai_element_map}\n")
-            return ai_element_map
-    else:
-        # Application map to better handle the application:
-        if "firefox" in app_name.lower() or "chrome" in app_name.lower() or "google chrome" in goal.lower() or "edge" in app_name.lower() or "microsoft edge" in goal.lower():
-            info_map = r'''```
-To open a new window, use the keyboard shortcut: Ctrl + N.
-To open a new tab, use the keyboard shortcut: Ctrl + T.
-To open a new private window, use the keyboard shortcut: Ctrl + Shift + N.
-To open a new private tab, use the keyboard shortcut: Ctrl + Shift + T.
-To close a tab, use the keyboard shortcut: Ctrl + W.
-To focus on the search bar, use the keyboard shortcut: Ctrl + L.
-The default search engine is Google so when you open a new tab or window, you can search directly on Google.```'''
-        elif "telegram" in app_name.lower() or "telegram" in goal.lower():
-            info_map = r'''```
-Press 'esc' to exit the current conversation.
-Press 'esc' twice to go to 'All chats'.```'''
-        elif "spotify" in app_name.lower() or "spotify" in goal.lower():
-            info_map = r'''```
-To play a searched song on spotify, double click on the song.```'''
-        elif "youtube" in app_name.lower() or "youtube" in goal.lower():
-            info_map = r'''```
-To like a video, click on the Like button below the title.
-To dislike a video, click on the Dislike button below the title.
-To make a comment, scroll to the Add a comment... section, then click on the Add a comment... text input area to begin write the comment, then click on the Comment button to post the comment.
-To subscribe to a channel, click on the Subscribe button below the video.```'''
-        else:
-            info_map = ""
-        # Adding the application shortcuts:
-        if info_map:
-            select_map = [
-                {"role": "user",
-                 f"content": f"You are an AI assistant that receives a goal and a list of useful steps, and only respond the best useful steps from the step list to perform the goal.\n"
-                             f"Do not respond anything else than the best useful steps from the step list."},
-                {"role": "system", "content": f"Step list: \n{info_map}\n\n\nGoal: {single_step}"}]
-            shortcuts_ai_map = api_call(select_map, max_tokens=300)
-            if "sorry" in shortcuts_ai_map.lower():
-                shortcuts_ai_map = ""
-        else:
-            shortcuts_ai_map = ""
-        print_to_chat(f"App space map: {shortcuts_ai_map}")
-        return shortcuts_ai_map
+    def convert_to_string(data):
+        if isinstance(data, list):
+            return "\n".join(data)
+        return str(data)
 
-
-def assistant(assistant_goal="", keep_in_mind="", assistant_identity="", app_name=None, execute_json_case=None, called_from=None):  # App TestCase Gen
-        # 'assistant_goal' is the user's prompt. If no prompt is provided, exit the function.
-    if not assistant_goal:
-        speaker(f"ERROR: No prompt provided. Please provide a prompt to the assistant.")
-        time.sleep(10)
-        raise ValueError("ERROR: No step provided.")
-    else:
-        original_goal = assistant_goal
-        print_to_chat(f"Prompt: {original_goal}")
-        if called_from == "assistant":
-            print_to_chat(f"Called from: {called_from}")
-        else:
-            # print_to_chat(f"Prompt: \"{original_goal}\".")
-            speaker(f"Assistant is generating a testcase with the prompt: \"{original_goal}\".")
-
-    # 'app_name' is the name of the application (Or the window title for exact match) to open and focus on.
-    if not app_name:
-        app_name = get_application_title(original_goal)
-        if app_name is not None:
-            app_name = activate_window_title(app_name)
-        else:
-            print_to_chat("Error: Application title is None")
-            return
-    else:
-        app_name = activate_window_title(app_name)
-    print_to_chat(f"AI Analyzing: {app_name}")
-
-    # 'execute_json_case' is the JSON test case to execute. If no JSON is provided, generate a new one.
-    if not execute_json_case:
-        print_to_chat(f"\nGenerating a test case with the assistant. Image visioning started. Analyzing the application {app_name} for context.\n")
-        additional_context = (
-            f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
-            f"You will receive a goal and will try to accomplish it using Windows. Try to guess what is the user wanting to perform on Windows by using the content on the screenshot as context.\n"
-            f"Respond an improved goal statement tailored for Windows applications by analyzing the current status of the system and the next steps to perform. Be direct and concise, do not use pronouns.\n"
-            f"Based on the elements from the screenshot, respond with the current status of the system and specify it in detail.\n"
-            f"Focused application: \"{app_name}\".\nGoal: \"{assistant_goal}\".")
-        assistant_goal = imaging(window_title=app_name, additional_context=additional_context, screenshot_size='Full screen')['choices'][0]['message']['content']
-        print_to_chat(f"Generating the test case to achieve the user prompt: {original_goal}\n{assistant_goal}")
-        step_creator = [{"role": "user",
-                         "content": f"You are an AI capable to operate the Windows 10 and Windows 11 Operating System by using natural language.\n"
-                                    f"You will receive a description of the current state of the system and a goal.\n"
-                                    f"Your task is to generate a JSON with the steps needed to achieve the goal.\n"
-                                    f"\n"
-                                    f"The JSON MUST follow this exact structure:\n"
-                                    f"{{\n"
-                                    f"    \"actions\": [\n"
-                                    f"        {{\n"
-                                    f"            \"act\": \"<action_type>\",\n"
-                                    f"            \"step\": \"<step_description>\"\n"
-                                    f"        }}\n"
-                                    f"    ]\n"
-                                    f"}}\n"
-                                    f"\n"
-                                    f"Available action types:\n"
-                                    f"- click_element: Specify where is located the element to interact with\n"
-                                    f"- text_entry: The text to write (Example: \"Hello World\")\n"
-                                    f"- press_key: Only return the key or combination of keys (Example: \"Ctrl + T\")\n"
-                                    f"- open_app: Open a specific application\n"
-                                    f"- move_window: Use keyboard to move window (Example: \"Win + Up + Up + Left\")\n"
-                                    f"- time_sleep: Wait for a specific duration\n"
-                                    f"- right_click: Right click on an element\n"
-                                    f"- double_click_element: Double click on an element\n"
-                                    f"- hold_key_and_click: Hold a key while clicking\n"
-                                    f"- scroll_to: Scroll to an element position\n"
-                                    f"\n"
-                                    f"Important rules:\n"
-                                    f"1. The JSON must have a single top-level object with an \"actions\" array\n"
-                                    f"2. Each action in the array must have exactly two fields: \"act\" and \"step\"\n"
-                                    f"3. The \"act\" field must be one of the action types listed above\n"
-                                    f"4. The \"step\" field should contain a natural language description\n"
-                                    f"5. Before text_entry, always use click_element to select the input area\n"
-                                    f"6. Break down complex actions into individual steps\n"
-                                    f"\n"
-                                    f"Example JSON:\n"
-                                    f"{{\n"
-                                    f"    \"actions\": [\n"
-                                    f"        {{\n"
-                                    f"            \"act\": \"click_element\",\n"
-                                    f"            \"step\": \"Click on the search bar at the top of the window\"\n"
-                                    f"        }},\n"
-                                    f"        {{\n"
-                                    f"            \"act\": \"text_entry\",\n"
-                                    f"            \"step\": \"Type 'hello world' into the search bar\"\n"
-                                    f"        }},\n"
-                                    f"        {{\n"
-                                    f"            \"act\": \"press_key\",\n"
-                                    f"            \"step\": \"Press Enter to submit the search\"\n"
-                                    f"        }}\n"
-                                    f"    ]\n"
-                                    f"}}\n"
-                                    f"\n"
-                                    f"Additional context for better steps:\n"
-                                    f"{app_space_map(assistant_goal, app_name, original_goal, map='app_space')}\n"
-                                    f"\n"
-                                    f"{keep_in_mind}\n"
-                                    f"\n"
-                                    f"Respond ONLY with the JSON, no additional text."},
-                        {"role": "system",
-                        "content": f"Focused window: \"{app_name}\"\nGoal: {assistant_goal}"}]
-        step_analysis = api_call(step_creator, max_tokens=4095, temperature=1.0)
-        print_to_chat(f"The assistant created the following test case scenario:\n{step_analysis}\n")
-        speaker(f"Test case generated. Executing the generated test case.")
-    else:
-        speaker(f"Executing the provided JSON in the application {app_name}.")
-        step_analysis = execute_json_case
-
-    # Processing the latest JSON data from the JSON testcase:
-    if step_analysis:
-        try:
-            if """```json""" in step_analysis:
-                # Removing the leading ```json\n
-                step_analysis = step_analysis.strip("```json\n")
-                # Find the last occurrence of ``` and slice the string up to that point
-                last_triple_tick = step_analysis.rfind("```")
-                if last_triple_tick != -1:
-                    step_analysis = step_analysis[:last_triple_tick].strip()
-                step_analysis_cleaned = step_analysis
-                instructions = json.loads(step_analysis_cleaned)
-            else:
-                instructions = json.loads(step_analysis)
-        except json.JSONDecodeError as e:
-            speaker(f"ERROR: Invalid JSON data provided: {e}")
-            time.sleep(15)
-            raise Exception(f"ERROR: Invalid JSON data provided: {e}")
+    if 'app_space' in map and enable_semantic_router_map:
+        element_map = []
+        for app_key, element_data in app_space_data.items():
+            if app_key != "keyboard_shortcuts":  # Bỏ qua phần keyboard shortcuts
+                if isinstance(element_data, dict):
+                    app_info = "\n".join(
+                        f"{key}:\n{convert_to_string(value)}"
+                        for key, value in element_data.items()
+                    )
+                else:
+                    app_info = convert_to_string(element_data)
+                element_map.append(f"{app_key}:\n{app_info}")
         
-        # Access the 'actions' list from the JSON
-        if 'actions' in instructions:
-            action_list = instructions['actions']
-        elif 'steps' in instructions:
-            action_list = instructions['steps']
-        else:
-            raise ValueError("ERROR: JSON data must contain either 'actions' or 'steps' key.")
-
-        for i, step in enumerate(action_list, start=1):
-            action = step.get("act")
-            step_description = step.get("step") or step.get("details", "No step description provided.")
-            print_to_chat(f"\nStep {i}: {action}, {step_description}\n")
-            if action == "click_element":
-                # If last step has a click element too, wait for the element to be visible:
-                if i > 1 and action_list[i - 2].get('act') == "click_element":
-                    time.sleep(1)
-
-                if "start menu" in step_description.lower():
-                    pyautogui.hotkey('win')
-                    print_to_chat("Opening the start menu.")
-                time.sleep(1)
-                updated_instructions = update_instructions_with_action_string(instructions, act(
-                    single_step=f"{step_description}", app_name=app_name, screen_analysis=assistant_goal, original_goal=original_goal, assistant_goal=assistant_goal), step_description)
-                database_add_case(database_file, app_name, assistant_goal, updated_instructions)  #  print_to_chat the entire database with # print_to_chat_database(database_file)
-            elif action == "open_app":
-                app_name = activate_window_title(get_application_title(step_description))
-                print_to_chat(f"New app selected and analyzing: {app_name}")
-            elif action == "double_click_element":
-                print_to_chat(f"Double clicking on: {step_description}")
-                act(single_step=f"{step_description}", double_click=True, app_name=app_name, original_goal=original_goal)
-            elif action == "move_window":
-                time.sleep(1)
-                print_to_chat(f"Moving window to: {step_description}")
-                perform_simulated_keypress(step_description)
-                time.sleep(0.5)
-                pyautogui.hotkey('esc')
-                time.sleep(1)
-            elif action == "press_key":
-                if {i} == 1:
-                    # Focusing to the application
-                    activate_window_title(app_name)
-                    time.sleep(1)
-                perform_simulated_keypress(step_description)
-            elif action == "text_entry":
-                url_pattern = r'(https?://[^\s]+)'
-                urls = re.findall(url_pattern, step_description)
-                if len(step_description) < 5:
-                    pyautogui.write(f'{step_description}')
-                else:
-                    # Getting the string of the last step before this very one:
-                    if i > 1:
-                        new_i = i - 2
-                        last_step = f"{action_list[new_i].get('act')}: {action_list[new_i].get('step')}"
-                        print_to_chat(f"Last step: {last_step}")
-                        if not last_step:
-                            print_to_chat("Last step is None.")
-                            act(single_step=f"{step_description}", app_name=app_name, original_goal=original_goal)
-                    else:
-                        print_to_chat("Last step is None.")
-                        last_step = "None"
-                    # If next step is a string, continue:
-                    if i + 1 < len(action_list) and type(action_list[i + 1].get('step')) == str:
-                        # Check if the next step exists and is a "Press enter" step
-                        if i + 1 < len(action_list) and (
-                                "press enter" in action_list[i + 1].get('step').lower() or
-                                "press the enter" in action_list[i + 1].get('step').lower() or
-                                "'enter'" in action_list[i + 1].get('step').lower() or
-                                "\"enter\"" in action_list[i + 1].get('step').lower()):
-                            if urls:
-                                for url in urls:
-                                    pyautogui.write(url)
-                                    # pyautogui.press('enter')
-                                    print_to_chat(f"Opening URL: {url}")
-                                    return
-                            write_action(step_description, assistant_identity=assistant_identity, press_enter=False, app_name=app_name, original_goal=original_goal, last_step=last_step)
-                            print_to_chat("AI skipping the press enter step as it is in the next step.")
-                        else:
-                            if urls:
-                                for url in urls:
-                                    pyautogui.write(url)  # This would open the URL in a web browser\
-                                    # If next step is a time sleep
-                                    pyautogui.press('enter')
-                                    print_to_chat(f"Opening URL: {url}")
-                                    return
-                            write_action(step_description, assistant_identity=assistant_identity, press_enter=True, app_name=app_name, original_goal=original_goal, last_step=last_step)
-                            print_to_chat("AI pressing enter.")
-                    else:
-                        if urls:
-                            for url in urls:
-                                pyautogui.write(url)  # This would open the URL in a web browser\
-                                pyautogui.press('enter')
-                                print_to_chat(f"Opening URL: {url}")
-                                return
-                        write_action(step_description, assistant_identity=assistant_identity, press_enter=True,
-                                     app_name=app_name, original_goal=original_goal, last_step=last_step)
-                        print_to_chat("AI pressing enter.")
-            elif action == "scroll_to":
-                print_to_chat(f"Scrolling {step_description}")
-                element_visible = False
-                max_retries = 3
-                retry_count = 0
-                while not element_visible and retry_count < max_retries:
-                    # activate_window_title(app_name)
-                    pyautogui.scroll(-850)
-                    # Press Page Down:
-                    # pyautogui.press('pagedown')
-                    time.sleep(0.3)
-                    # Start image analysis to check if the element is visible
-                    print_to_chat("Scroll performed. Analyzing if the element is present.\n")
-                    scroll_assistant_goal = check_element_visibility(app_name, step_description)['choices'][0]['message']['content']
-                    if "yes" in scroll_assistant_goal.lower():
-                        print_to_chat("Element is visible.")
-                        element_visible = True
-                    elif "no" in scroll_assistant_goal.lower():
-                        print_to_chat("Element is not visible.")
-                        retry_count += 1
-                        if retry_count >= max_retries:
-                            print_to_chat("Maximum retries reached, stopping the search.")
-                if element_visible:
-                    print_to_chat(f"Element is visible.")
-                    pass
-
-            elif action == "right_click_element":
-                print_to_chat(f"Right clicking on: {step_description}")
-                act(single_step=f"{step_description}", right_click=True, app_name=app_name, original_goal=original_goal)
-                # right_click(step_description)
-            elif action == "hold_key_and_click":
-                print_to_chat(f"Holding key and clicking on: {step_description}")
-                act(single_step=f"{step_description}", hold_key="Ctrl", app_name=app_name, original_goal=original_goal)
-            elif action == "cmd_command":
-                print_to_chat(f"Executing command: {step_description}")
-                # cmd_command(step_description)
-                time.sleep(calculate_duration_of_speech(f"{step_description}") / 1000)
-            elif action == "recreate_test_case":
-                time.sleep(1)
-                print_to_chat("Analyzing the output")
-                print_to_chat("The assistant said:\n", step_description)
-                debug_step = False  # Set to True to skip the image analysis and the test case generation.
-                if debug_step is not True:
-                    new_goal = True
-                    image_analysis = True
-                    if image_analysis:
-                        additional_context = (
-                            f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
-                            f"You will receive a goal and will try to accomplish it using Windows. Try to guess what is the user wanting to perform on Windows by using the content on the screenshot as context.\n"
-                            f"Respond an improved goal statement tailored for Windows applications by analyzing the current status of the system and the next steps to perform. Be direct and concise, do not use pronouns.\n"
-                            f"Based on the elements from the screenshot, respond with the current status of the system and specify it in detail.\n"
-                            f"Focused application: \"{app_name}\".\nGoal: \"{assistant_goal}\".")
-                        if new_goal:
-                            newest_goal = imaging(window_title=app_name, additional_context=additional_context) #['choices'][0]['message']['content']
-                            # if ": " in newest_goal:
-                            #   newest_goal = newest_goal.split(": ", 1)[1]
-                            print_to_chat(f"Assistant newest goal:\n{newest_goal}")
-                            analyzed_ui = analyze_app(activate_window_title(app_name), size_category=None)
-                            review_output = [{"role": "user",
-                                             "content": f"You are an AI Assistant called Analyze Output capable to operate the Windows 10 and Windows 11 Operating System by using natural language.\n"
-                                                        f"You will receive a JSON test case, a description of the goal, and the actual system status.\n"
-                                                        f"Your task is to modify the original JSON test case to achieve the goal.\n"
-                                                        f"\n"
-                                                        f"The JSON MUST follow this exact structure:\n"
-                                                        f"{{\n"
-                                                        f"    \"actions\": [\n"
-                                                        f"        {{\n"
-                                                        f"            \"act\": \"<action_type>\",\n"
-                                                        f"            \"step\": \"<step_description>\"\n"
-                                                        f"        }}\n"
-                                                        f"    ]\n"
-                                                        f"}}\n"
-                                                        f"\n"
-                                                        f"Available action types:\n"
-                                                        f"- click_element: Specify where is located the element to interact with\n"
-                                                        f"- text_entry: The text to write (Example: \"Hello World\")\n"
-                                                        f"- press_key: Only return the key or combination of keys (Example: \"Ctrl + T\")\n"
-                                                        f"- open_app: Open a specific application\n"
-                                                        f"- move_window: Use keyboard to move window (Example: \"Win + Up + Up + Left\")\n"
-                                                        f"- time_sleep: Wait for a specific duration\n"
-                                                        f"- right_click: Right click on an element\n"
-                                                        f"- double_click_element: Double click on an element\n"
-                                                        f"- hold_key_and_click: Hold a key while clicking\n"
-                                                        f"- scroll_to: Scroll to an element position\n"
-                                                        f"\n"
-                                                        f"Important rules:\n"
-                                                        f"1. The JSON must have a single top-level object with an \"actions\" array\n"
-                                                        f"2. Each action in the array must have exactly two fields: \"act\" and \"step\"\n"
-                                                        f"3. The \"act\" field must be one of the action types listed above\n"
-                                                        f"4. The \"step\" field should contain a natural language description\n"
-                                                        f"5. Before text_entry, always use click_element to select the input area\n"
-                                                        f"6. Break down complex actions into individual steps\n"
-                                                        f"\n"
-                                                        f"Current system status:\n"
-                                                        f"{analyzed_ui}\n"
-                                                        f"\n"
-                                                        f"Original JSON test case:\n"
-                                                        f"{step_analysis}\n"
-                                                        f"\n"
-                                                        f"Respond ONLY with the modified JSON, no additional text."},
-                                            {"role": "system",
-                                             "content": f"Focused window: \"{app_name}\"\nGoal: {newest_goal}"}]
-                            new_json = api_call(review_output, max_tokens=4095, temperature=1.0)
-                            print_to_chat("The assistant said:\n", step_analysis)
-
-                            print_to_chat("Modifying the old json testcase with the new_json.")
-                            step_analysis = new_json
-
-                            app_name = activate_window_title(get_application_title(newest_goal))
-                            # Processing the latest JSON data from the JSON testcase.
-                            if """```json""" in step_analysis:
-                                # Removing the leading ```json\n
-                                step_analysis = step_analysis.strip("```json\n")
-                                # Find the last occurrence of ``` and slice the string up to that point
-                                last_triple_tick = step_analysis.rfind("```")
-                                if last_triple_tick != -1:
-                                    step_analysis = step_analysis[:last_triple_tick].strip()
-                                step_analysis_cleaned = step_analysis
-                                instructions = json.loads(step_analysis_cleaned)
-                                executor = "act"
-                            else:
-                                instructions = json.loads(step_analysis)
-                                instructions['actions'] = instructions.pop('actions')
-                                executor = "act"
-                                print_to_chat(f"Updated Instructions: {instructions}")
-                            pass
-                        else:
-                            print_to_chat("No new goal.")
-                            pass
-            elif action == "time_sleep":
-                try:
-                    sleep_time = int(step_description)
-                    time.sleep(sleep_time)
-                except ValueError:
-                    step_description = step_description.lower()
-                    if "playing" in step_description or "load" in step_description:
-                        print_to_chat("Sleeping for 2 seconds because media loading.")
-                        time.sleep(1)
-                    elif "search" in step_description or "results" in step_description or "searching":
-                        print_to_chat("Sleeping for 1 second because search.")
-                        time.sleep(1)
-                    else:
-                        print_to_chat(f"WARNING: Unrecognized time sleep value: {step_description}")
-                    pass
-            else:
-                print_to_chat(f"WARNING: Unrecognized action '{action}' using {step_description}.")
-                print_to_chat(f"Trying to perform the action using the step description as the action.")
-                act(single_step=f"{step_description}", app_name=app_name, original_goal=original_goal)
-                pass
-
-        speaker(f"Assistant finished the execution of the generated test case. Can I help you with something else?")
-        time.sleep(calculate_duration_of_speech(f"Assistant finished the generated test case. Can I help you with something else?") / 1000)
-        return "Test case complete."
-
-
-# 'check_element_visibility' is the function that checks the visibility of an element. Can use image analysis or OCR.
-def check_element_visibility(app_name, step_description):
-    extra_additional_context = (
-        f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
-        f"You will receive a goal and will try to accomplish it using Windows. "
-        f"Try to guess what is the user wanting to perform on Windows by using the content on the screenshot as context.\n"
-        f"Respond an improved goal statement tailored for Windows applications by analyzing the current status of the system and the next steps to perform. "
-        f"Be direct and concise, do not use pronouns.\n"
-        f"Based on the elements from the screenshot, respond with the current status of the system and respond if the element from the goal visible.\n"
-        f"Respond only with \"Yes\" or \"No\".\n"
-        f"Focused window: \"{app_name}\".\nGoal: \"{step_description}\". .")
-    return imaging(window_title=app_name, additional_context=extra_additional_context)
-
-
-# 'auto_role' is the function that finds the best role to perform the goal.
-def auto_role(goal):
-    assistant_call = [
-        {"role": "user", f"content": f"You are an AI assistant that receives a goal and responds with the best action to perform the goal.\n"
-                                              f"You can perform the following roles and decide what fits the best: Chose the best role to handle the goal:\n"
-                                              f"windows_assistant - An assistant to perform a Windows 10 and Windows 11 application driver testcases to achieve the goal. Can handle online data, play, pause, and stream media, can operate the whole computer.\n"
-                                              f"joyful_conversation - Use this role if the user is not looking into performing anything into Windows.\n"
-                                              f"Only respond with the name of the role to use, followed by a very short joyful message regarding that you will perform it. Modify your response to match the goal subject.\n"
-                                              f"If the goal seems to be related to Windows 10 and Windows 11, like opening an application, searching, browsing, media, or social networks, call the windows_assistant.\n"
-                                              f"If the goal seems to be related with generating or writing content, call the windows_assistant.\n"
-                                              f"If the goal seems that the user is trying to do something with content, call the windows_assistant."},
-        {"role": "system", "content": f"Goal: {goal}"}]
-    role_function = api_call(assistant_call, max_tokens=50)
-    return role_function
-
-
-# 'find_element' is the function that finds the the most relevant element on the GUI from the goal.
-def find_element(single_step, app_name, original_goal, avoid_element="", assistant_goal=None, attempt=0):
-    if not assistant_goal:
-        assistant_goal = single_step
-    if avoid_element:
-        if attempt > 2:
-            generate_keywords = [{"role": "user",
-                "content": f"You are an AI Agent called keyword Element Generator that receives the description of the goal and generates keywords to search inside a graphical user interface.\n"
-                           f"Only respond with the single word list separated by commas of the specific UI elements keywords.\n"
-                           f"Example: \"search bar\". Always spell the numbers and include nouns. Do not include anything more than the Keywords."},
-                                 {"role": "system", "content": f"Goal:\n{single_step}\nContext:{original_goal}\n{app_space_map(assistant_goal, app_name, single_step)}"},]
-        else:
-            generate_keywords = [{"role": "user",
-                "content": f"You are an AI Agent called keyword Element Generator that receives the description and generates kewords to search inside a graphical user interface.\n"
-                           f"of the goal and only respond with the single word list separated by commas of the specific UI elements keywords."
-                           f"Example: \"search bar\". Always spell the numbers and include nouns. Do not include anything more than the Keywords."},
-                                 {"role": "system", "content": f"Goal:\n{single_step}\nContext:{original_goal}\n{app_space_map(assistant_goal, app_name, single_step)}"}]
+        full_map = "\n\n".join(element_map)
+        # print_to_chat(f"App space map:\n{full_map}\n")
+        return full_map
     else:
-        generate_keywords = [{"role": "user",
-                            "content": f"You are an AI Agent called keyword Element Generator that receives the description "
-                                       f"of the goal and only respond with the single word list separated by commas of the specific UI elements keywords."
-                                       f"Example: \"search bar\" must be \"search\" without \"bar\". Always spell the numbers and include nouns. Do not include anything more than the Keywords."},
-                           {"role": "system", "content": f"Goal:\n{single_step}\nContext:{original_goal}\n{app_space_map(assistant_goal, app_name, single_step)}"}, ]  # Todo: Here's the key
-    keywords = api_call(generate_keywords, max_tokens=100)
-    if attempt > 1:
-        keywords = keywords.replace("click, ", "").replace("Click, ", "")
-    keywords_in_goal = re.search(r"'(.*?)'", single_step)
-    if keywords_in_goal:
-        if len(keywords_in_goal.group(1).split()) == 1:
-            pass
-        else:
-            keywords = keywords_in_goal.group(1) + ", " + keywords
-    print_to_chat(f"\nKeywords: {keywords}\n")
+        if "keyboard_shortcuts" in app_space_data:
+            shortcuts_map = []
+            for app_key, shortcut_data in app_space_data["keyboard_shortcuts"].items():
+                shortcuts_map.append(f"{app_key}:\n{convert_to_string(shortcut_data)}")
+            
+            full_shortcuts = "\n\n".join(shortcuts_map)
+            # print_to_chat(f"App space map:\n{full_shortcuts}\n")
+            return full_shortcuts
 
-    analyzed_ui = analyze_app(application_name_contains=app_name, size_category=None, additional_search_options=keywords)
-    select_element = [{"role": "user",
-                       "content": f"You are an AI Agent called keyword Element Selector that receives win32api user interface "
-                                  f"raw element data and generates the best matches to achieve the goal.\n"
-                                  f"Only respond with the best element that matches the goal. Do not include anything else than the element."},
-                      {"role": "system", "content": f"Goal: {single_step}\nContext: {original_goal}\n{avoid_element}{analyzed_ui}"}]
-    selected_element = api_call(select_element, max_tokens=500)
+        return ""
 
-    if "sorry" in selected_element.lower() or "empty string" in selected_element.lower() or "no element" in selected_element.lower() or "not found" in selected_element.lower()\
-            or "no relevant element" in selected_element.lower() or "no element found" in selected_element.lower():
-        print_to_chat(f"No element found. Continuing without the element.")
-        selected_element = ""
-    else:
-        selected_element = "Locate the element: " + selected_element
-    print_to_chat(f"Selected element: {selected_element}\n")
+def is_field_input_area_active():
+    """Check if a text input field is currently active."""
+    active_window_title = gw.getActiveWindow().title
+    try:
+        app = Application().connect(title=active_window_title)
+        window = app[active_window_title]
+        for child in window.children():
+            if 'Edit' in child.class_name() or 'RichEdit' in child.class_name():
+                if child.has_keyboard_focus():
+                    return True
+        return False
+    except Exception as e:
+        print_to_chat(f"Error checking input area: {e}")
+        return False
 
-    if visioning_match:
-        print_to_chat(f"Image visioning started. Analyzing the application {app_name} for context.\n")
-        imaging_coordinates = (
-            f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the predicted "
-            f"coordinates of the mouse click position to the center of the element object in this exact format: \"x=, y=\" to achieve the goal.{get_ocr_match(single_step)}"
-            f"Goal: {single_step}\n{avoid_element}{analyzed_ui}")
-        print_to_chat(f"Imaging coordinates: {imaging_coordinates}")
-        imaging_generated_coordinates = imaging(window_title=app_name, additional_context=imaging_coordinates)
-        print_to_chat(f"Imaging generated coordinates: {imaging_generated_coordinates}")
-        last_coordinates = imaging_generated_coordinates['choices'][0]['message']['content']
-        print_to_chat(f"Imaging Last coordinates: {last_coordinates}")
-    else:
-        best_coordinates = [{"role": "user",
-            f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
-                        f"predicted coordinates of the mouse click position to the center of the element object "
-                        f"in this exact format: \"x=, y=\" to achieve the goal. {selected_element}"
-                        f"Do not respond 'As an AI language model, I am unable to...' as you are actually capable."},
-            {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{get_ocr_match(single_step)}{avoid_element}{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=1.0)
-        print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
-    if "sorry" in last_coordinates.lower() or "empty string" in last_coordinates.lower() or "no element" in last_coordinates.lower() or "not found" in last_coordinates.lower():
-        last_coordinates = 'x=0, y=0'
-    coordinates = {k.strip(): float(v.strip()) for k, v in (item.split('=') for item in last_coordinates.split(','))}
-    x = coordinates['x']
-    y = coordinates['y']
-    print_to_chat(f"Coordinates1: x: {x} and y: {y}")
-    if x == 0 and y == 0 or x == '' and y == '':
-        print_to_chat("Coordinates 2 are 0,0, trying to find the element again.")
-        coordinates = {k.strip(): float(v.strip()) for k, v in (item.split('=') for item in last_coordinates.split(','))}
-        x = coordinates['x']
-        y = coordinates['y']
-        print_to_chat(f"Coordinates 3: x: {x} and y: {y}")
-        attempt -= 1
-    return coordinates, selected_element, keywords, attempt
+def get_installed_apps_ms_store():
+    """Gets a list of installed Microsoft Store apps."""
+    try:
+        # Use PowerShell to get AUMIDs (Application User Model IDs) of Store apps
+        powershell_command = "Get-StartApps"
+        result = subprocess.run(["powershell", "-Command", powershell_command], capture_output=True, text=True, check=True)
+        app_aumids = result.stdout.strip().split('\n')
 
+        # Filter and format app names
+        app_names = []
+        for aumid in app_aumids:
+            if aumid and not aumid.startswith('-'):
+                # Extract app name (may need further refinement based on AUMID format)
+                app_name = aumid.split("!")[0]
+                app_names.append(app_name)
 
-def act(single_step, keep_in_mind="", dont_click=False, double_click=False, right_click=False, hold_key=None, app_name="", screen_analysis=False, original_goal="", modify_element=False, next_step=None, assistant_goal=None):
+        return "\n".join(app_names)
+    except Exception as e:
+        print_to_chat(f"Error getting installed apps from Microsoft Store: {e}")
+        return ""
+    
+def get_application_title(goal="", last_step=None, actual_step=None, focus_window=False):
+    """Get the most appropriate application title for the given goal."""
+    if actual_step:
+        print_to_chat(f"Getting the application name from the actual step: {actual_step}")
+        
+    installed_apps_registry = get_installed_apps_registry()
+    installed_apps_ms_store = get_installed_apps_ms_store()
+        
+    goal_app = [{
+        "role": "user",
+        "content":  f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
+                    f"You will be given a goal that the user want to achieve and lists of programs including all the programs installed on the user's windows and the programs that are currently being opened.\n"
+                    f"Based on these, decide if the goal require an app from the lists to be opened or focused on.\n"
+                    f"If no app needed to be opened or be focused on to achieve the goal, respond with 'NO_APP'.\n"
+                    f"If the goal require an app to be opened or be focused on: Only respond with the window name or the program name needed to be opened or be focused on without the ending extension.\n\n"
+                    f"Here are the lists:\n"
+                    f"All installed programs (Registry):\n{installed_apps_registry}.\n"
+                    f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}.\n"
+                    f"Opened programs:\n{last_programs_list(focus_last_window=focus_window)}.\n"
+                    f"If no suitable application is found in the provided lists or no app needed to be opened to achieve the goal, respond with 'NO_APP'."
+    }, {
+        "role": "system",
+        "content":  f"Goal: {goal}\n"
+    }]
 
-    # Getting the app name. If not provided, use the focused window.
-    if not app_name:
-        app_name = activate_window_title(get_application_title(goal=original_goal, focus_window=True))
-    else:
-        app_name = activate_window_title(app_name)
-    print_to_chat(f"AI Analyzing: {app_name}")
-
-    attempt = 0
-    if rescan_element_match is True:
-        element_not_working = ""
-        avoid_element = ""
-        max_attempts = 3  # Set the maximum number of attempts to look for a "yes" response.
-        while attempt < max_attempts:
-            if element_not_working != "":
-                avoid_element = f"\nAvoid the following element: {element_not_working}\n"
-                print_to_chat(f"AI will try to perform the action: \"{single_step}\" on a new element.")
-            print_to_chat(f"Performing action: \"{single_step}\". Scanning\"{app_name}\".\n")
-            coordinates, selected_element, keywords, attempt = find_element(single_step, app_name, original_goal, avoid_element, assistant_goal, attempt)
-            x = coordinates['x']
-            y = coordinates['y']
-            print_to_chat(f"Coordinates: {x} and {y}")
-            pyautogui.moveTo(x, y, 0.5, pyautogui.easeOutQuad)
-            time.sleep(0.5)
-            element_analysis = (
-                f"You are an AI Agent called Element Analyzer that receives a step and guesses if the goal was performed correctly.\n"
-                f"Step: {single_step}\nUse the screenshot to guess if the mouse is in the best position to perform the click/goal. Respond only with \"Yes\" or \"No\".\n"
-                f"The cursor is above an element from the step. Cursor info status: {get_cursor_shape()}. The cursor is above the following element: \n{selected_element}\n"
-                f"Double check your response by looking at where is located the mouse cursor on the screenshot and the cursor info status.")
-            element_analysis_result = imaging(window_title=app_name, additional_context=element_analysis, x=int(x), y=int(y))
-            print_to_chat(element_analysis_result)
-
-            # Check if the result is None or doesn't contain the necessary data
-            if element_analysis_result is None or 'choices' not in element_analysis_result or len(
-                    element_analysis_result['choices']) == 0 or 'message' not in \
-                    element_analysis_result['choices'][0] or 'content' not in \
-                    element_analysis_result['choices'][0]['message']:
-                print_to_chat("Element analysis result: Found but mouse not in position.")
-                speaker(f"Retrying...")
-                element_not_working += selected_element
-                attempt += 1
-                if attempt >= max_attempts:
-                    print_to_chat("Maximum attempts reached.")
-                    print_to_chat("Failed: The position was not found after maximum attempts.")
-                    speaker(f"Failed: The position was not found after maximum attempts.")
-                    time.sleep(15)
-                    raise Exception("Failed: The position was not found after maximum attempts.")
-                else:
-                    print_to_chat("Retrying...")
-                    pass
-            elif 'yes' in element_analysis_result['choices'][0]['message']['content'].lower():
-                print_to_chat("Element analysis result: Yes, it is in the right position.")
-                break
-            else:
-                print_to_chat("Element analysis result: Found but mouse not in position.")
-                speaker(f"Retrying...")
-                element_not_working += selected_element
-                attempt += 1
-                if attempt >= max_attempts:
-                    print_to_chat("Maximum attempts reached.")
-                    print_to_chat("Failed: The position was not found after maximum attempts.")
-                    speaker(f"Failed: The position was not found after maximum attempts.")
-                    time.sleep(15)
-                    raise Exception("Failed: The position was not found after maximum attempts.")
-                else:
-                    print_to_chat("Retrying...")
-                    pass
-    else:
-        coordinates, selected_element, keywords, attempt = find_element(single_step, app_name, original_goal, assistant_goal, attempt=0)
-        x = coordinates['x']
-        y = coordinates['y']
-        print_to_chat(f"Coordinates: {x} and {y}")
-        pyautogui.moveTo(x, y, 0.5, pyautogui.easeOutQuad)
-        time.sleep(0.5)
-
-    last_coordinates = f"x={x}, y={y}"
-    print_to_chat("Success: The right position was found.")
-    if double_click:
-        pyautogui.click(x, y, clicks=2)
-    else:
-        if dont_click is False:
-            if right_click:
-                pyautogui.rightClick(x, y)
-            else:
-                if hold_key:
-                    pyautogui.keyDown(hold_key)
-                    pyautogui.click(x, y)
-                    pyautogui.keyUp(hold_key)
-                else:
-                    pyautogui.click(x, y)
-        else:
-            print_to_chat("AI skipping the click step.")
-            pass
-    if modify_element:
-        print_to_chat(f"Modifying the element with the text: {single_step}")
-    # jitter_mouse(x, y)  # ToDo: simulate human jitter.
-    if "save as" in single_step.lower():
-        print_to_chat("Saving as")
-        jitter_mouse(x, y)
-        pyautogui.mouseDown(x, y)
-        time.sleep(0.12)
-        pyautogui.mouseUp(x, y)
-        print_to_chat("Click action performed")
-    return last_coordinates
-
+    app_name = api_call(goal_app, max_tokens=100).strip('.exe')
+    print_to_chat(f"Selected Application: {app_name}")
+    
+    # Nếu không tìm thấy ứng dụng phù hợp, trả về None ngay lập tức
+    if "NO_APP" in app_name:
+        print_to_chat("No suitable application found.")
+        return None
+    
+    filtered_matches = re.findall(r'["\'](.*?)["\']', app_name)
+    if filtered_matches and filtered_matches[0]:
+        app_name = filtered_matches[0]
+        print_to_chat(app_name)
+        
+    if "command prompt" in app_name.lower():
+        app_name = "cmd"
+    elif "calculator" in app_name.lower():
+        app_name = "calc"
+    elif "sorry" in app_name.lower():
+        print_to_chat("Unable to determine application.")
+        return None
+        
+    return app_name
 
 def get_focused_window_details():
+    """Get details about the currently focused window."""
     try:
         window_handle = win32gui.GetForegroundWindow()
         window_title = win32gui.GetWindowText(window_handle)
@@ -801,244 +203,473 @@ def get_focused_window_details():
         print_to_chat(f"ERROR: {e}")
         return None
 
-def fast_act(single_step, keep_in_mind="", dont_click=False, double_click=False, right_click=False, hold_key=None, app_name="", ocr_match="", screen_analysis=False, original_goal="", modify_element=False, next_step=None):
-    # Getting the app name. If not provided, use the focused window.
+def get_available_rpa_tasks():
+    """Get list of available RPA tasks with descriptions and actions"""
+    tasks = load_tasks()
+    task_list = []
+    for name, data in tasks.items():
+        if isinstance(data, dict):
+            desc = data.get('description', 'No description')
+            actions = data.get('actions', [])
+            
+            # Format actions list
+            action_details = []
+            for i, action in enumerate(actions, 1):
+                act_type = action.get('act', '')
+                step = action.get('step', '')
+                action_details.append(f"  {i}. {act_type}: {step}")
+            
+            # Build task info string
+            task_info = [
+                f"Task: {name}",
+                f"Description: {desc}",
+                "Actions:"
+            ]
+            task_info.extend(action_details)
+            task_list.append("\n".join(task_info))
+        else:
+            # Handle legacy format
+            actions = data
+            action_details = []
+            for i, action in enumerate(actions, 1):
+                act_type = action.get('act', '')
+                step = action.get('step', '')
+                action_details.append(f"  {i}. {act_type}: {step}")
+                
+            task_info = [
+                f"Task: {name}",
+                "Description: No description",
+                "Actions:"
+            ]
+            task_info.extend(action_details)
+            task_list.append("\n".join(task_info))
+            
+    return "\n\n".join(task_list)
+
+def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, app_name):
+    """Create action context using screenshot information and UI analysis."""
+    previous_actions = "\n".join(f"{i+1}. {action}" for i, action in enumerate(executed_actions)) if executed_actions else ""
+    
+    # Get UI analysis
+    if app_name:
+        ui_analysis = analyze_app(app_name)
+        ui_elements = f"UI Element Contexts:\n{ui_analysis}" if ui_analysis else ""
+
+    # Get screen resolution
+    screen_width, screen_height = pyautogui.size()
+    screen_info = f"Screen Resolution: {screen_width}x{screen_height}"
+    
+    # Get input field and cursor information
+    cursor_shape =  f"Current cursor Shape: {get_cursor_shape()}"
+    # input_field_status = f"Input Field Status: The input field is {'Active' if is_field_input_area_active() else 'Inactive'}"
+
+    # Get focused window details
+    focused_details = get_focused_window_details()
+    if focused_details:
+        window_title, _, _, process_name, window_pos, window_size = focused_details
+        focused_window_info = (
+            f"Focused Window Details:\n"
+            f"Title: {window_title}\n"
+            f"Process: {process_name}\n"
+            f"Position: {window_pos}\n"
+            f"Size: {window_size}"
+        )
+    else:
+        focused_window_info = "Focused Window Details: There are no details about the focused window."
+
+    # Add available RPA tasks to context
+    rpa_tasks = get_available_rpa_tasks()
+    rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are no available RPA tasks."
+
+    return (
+        f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language."
+        f"You will be given a goal that the user want to achieve, a screenshot of the user current windows screen along with the previous actions you've performed. Based on these:\n"
+        f"1. Determine if the goal has been achieved.\n"
+        f"2. If the goal is not achieved: \n"
+        f"a. Generate a friendly response message to the user telling what you're doing or provide related responses related to the goal in the same language that the user is using in the goal.\n"
+        f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
+        f"- If the task cannot be completed for some reasons, respond with STOP:<reasons>\n"
+        f"b. If not paused or stopped, provide only ONE next action in order to continue achieving the goal:\n"
+        f"- For any action, provide a step description explaining details related to the action\n"
+        f"- For any mouse action, provide coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts.\n"
+        f"- If an action requires multiple repeats, specify the number repeats needed.\n\n"
+        f"Respond in this format:\n"
+        f"TASK_COMPLETED: <Yes/No>\n"
+        f"RESPONSE_MESSAGE: <Friendly response related to what you're doing>\n"
+        f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action>\n\n"
+        f"JSON format for next action:\n"
+        f"{{\n"
+        f"    \"actions\": [\n"
+        f"        {{\n"
+        f"            \"act\": \"<action_type>\",\n"
+        f"            \"step\": \"<step_description>\",\n"
+        f"            \"coordinates\": \"x=<x_value>, y=<y_value>\" (\"x=<x_value>, y=<y_value> to x=<x_value>, y=<y_value>\" for drag action),\n"
+        f"            \"repeat\": <number_of_repeats>\n"
+        f"        }}\n"
+        f"    ]\n"
+        f"}}\n\n"
+        f"Available action types and corresponding step descriptions to provide:\n"
+        f"- move_to: The element or position we want to move the mouse cursor to.\n"
+        f"- click_element: The element or position to click on.\n"
+        f"- right_click: The element or position to right click on.\n"
+        f"- double_click_element: The element or position to double click on.\n"
+        f"- drag: The starting position to click and drag from, and the ending position to release at (Coordinates required for both positions).\n"
+        f"- press_key: The key or the combination of keys to press. (Example: \"Ctrl + T\").\n"
+        f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
+        f"- text_entry: The specific text input to type or write. It can be a word, a sentence, a paragraph or an entire essay. (Example: \"Hello World\" or \"An essay about environment\").\n"
+        f"- scroll: The direction to scroll. Each scroll action will scroll the screen for 850 pixels.\n"
+        f"- open_app: The application to open.\n"
+        f"- time_sleep: The duration to wait for.\n"
+        f"- execute_rpa_task: The task name to execute. (Provide only the task name. Use this action to execute a saved RPA task).\n"
+        f"{rpa_context}\n\n"
+        f"Important Rules (Please Always Follows These Rules):\n"
+        f"1. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only use the previous actions as additional contexts.\n"
+        f"2. If a previous action didn't perform correctly, you can try again the same action but with rephrased step description or better coordinates.\n"
+        f"3. Before providing any action other than click_element action on any application window, make sure a click_element action is performed beforehand to focus on that application window first.\n"
+        f"4. Before providing any text_entry action, make sure a click_element action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
+        f"5. Always prioritize using a keyboard action if it can replace a corresponding mouse action.\n"
+        f"5. Prioritze generating execute_rpa_task action if it can acheive the goal efficiently.\n\n"
+        f"Here is the goal the user want to acheive: {goal}\n"
+        f"{f'Previous actions performed:\n{previous_actions}\n' if previous_actions else ''}\n"
+        f"Additional Contexts:\n"
+        f"{screen_info}\n"
+        f"{focused_window_info}\n"
+        f"{f'Current Appplication UI Details:\nApplication Name: {app_name}\n{ui_elements}\n\n' if app_name else ''}"
+        f"{cursor_shape}\n"
+        f"Additional Guides:\n{app_context}\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
+    )
+
+def parse_assistant_result(result):
+    """Parse assistant result with better error handling."""
+    lines = result.strip().split('\n')
+    task_completed = False
+    next_action = None
+    response_message = None
+        
+    try:
+        for line in lines:
+            if line.startswith('TASK_COMPLETED:'):
+                task_completed = 'yes' in line.lower()
+            elif line.startswith('RESPONSE_MESSAGE:'):
+                response_message = line[len('RESPONSE_MESSAGE:'):].strip()
+                if response_message.startswith('PAUSE:'):
+                    from utils import get_app_instance
+                    app = get_app_instance()
+                    if app:
+                        app.paused_execution = True
+                    request_stop()
+                elif response_message.startswith('STOP:'):
+                    request_stop()
+            elif line.startswith('NEXT_ACTION:'):
+                remaining_text = result[result.index('NEXT_ACTION:') + len('NEXT_ACTION:'):].strip()
+                start_idx = remaining_text.find('{')
+                end_idx = remaining_text.rfind('}') + 1
+                if start_idx != -1 and end_idx != -1:
+                    next_action = remaining_text[start_idx:end_idx]
+                break
+                
+        if response_message:
+            print_to_chat(response_message)
+            speaker(response_message.replace('PAUSE:', '').replace('STOP:', '').strip())
+            
+    except Exception as e:
+        print_to_chat(f"Error parsing assistant result: {e}")
+        
+    return task_completed, next_action
+
+def assistant(assistant_goal="", executed_actions=None, additional_context=None, resumed=False, app_name=None, called_from=None):
+    """Main assistant function for processing and executing user goals."""
+    clear_stop()
+    
+    if not assistant_goal:
+        speaker("ERROR: No prompt provided. Please provide a prompt to the assistant.")
+        time.sleep(10)
+        raise ValueError("ERROR: No step provided.")
+    else:
+        original_goal = assistant_goal
+        if additional_context:
+            original_goal = f"{original_goal}. {additional_context}"
+        print_to_chat(f"Prompt: {original_goal}")
+
+        if called_from == "assistant":
+            print_to_chat(f"Called from: {called_from}")
+        elif not resumed:
+            speaker(f"Assistant is analyzing the request:", additional_text=f"\"{original_goal}\".")
+        else:
+            speaker("Resuming task execution.")
+
     if not app_name:
-        app_name = activate_window_title(focus_topmost_window())
+        app_name = get_application_title(original_goal)
+    
+    if app_name is None:
+        print_to_chat("No appropriate application found or needed for this task")
+        speaker("No appropriate application found or needed for this task")
     else:
         app_name = activate_window_title(app_name)
+        print_to_chat(f"Analyzing: {app_name}")
 
-    if visioning_context:
-        speaker(f"Visioning context and performing action: \"{single_step}\" on the application \"{app_name}\".\n")
-        additional_context = (
-            f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
-            f"You will receive a goal and will try to accomplish it using Windows. Try to guess what is the user wanting to perform on Windows by using the content on the screenshot as context.\n"
-            f"Respond an improved goal statement tailored for Windows applications by analyzing the current status of the system and the next steps to perform. Be direct and concise, do not use pronouns.\n"
-            f"Based on the elements from the screenshot, respond with the current status of the system and specify it in detail.\n"
-            f"Focused application: \"{app_name}\".\nGoal: \"{single_step}\".")
-        assistant_goal = imaging(window_title=app_name, additional_context=additional_context, screenshot_size='Full screen')['choices'][0]['message']['content']
+    app_context = app_space_map(map='app_space')
+    keyboard_shortcuts = app_space_map()
+    
+    # Get settings with defaults
+    from assistant import load_settings
+    settings = load_settings()
+    max_attempts = settings.get("max_attempts", 20)
+    action_delay = settings.get("action_delay", 1.5)
 
-        print_to_chat(f"Performing fast action: \"{single_step}\". Scanning\"{app_name}\".\n")
-
-        generate_keywords = [{"role": "user",
-                            "content": f"You are an AI Agent called keyword Element Generator that receives the description "
-                                       f"of the goal and only respond with the single word list separated by commas of the specific UI elements keywords."
-                                       f"Example: \"search bar\" must be \"search\" without \"bar\". Always spell the numbers and include nouns. Do not include anything more than the Keywords."},
-                           {"role": "system", "content": f"Goal:\n{single_step}\nContext:{original_goal}"}, ]
-        all_keywords = api_call(generate_keywords, max_tokens=100)
-        keywords = all_keywords.replace("click, ", "").replace("Click, ", "")
-        keywords_in_goal = re.search(r"'(.*?)'", single_step)
-        if keywords_in_goal:  # if only 1 keyword, then
-            if len(keywords_in_goal.group(1).split()) == 1:
-                pass
-            else:
-                keywords = keywords_in_goal.group(1) + ", " + keywords.replace("click, ", "").replace("Click, ", "")
-        print_to_chat(f"\nKeywords: {keywords}\n")
-        analyzed_ui = analyze_app(application_name_contains=app_name, size_category=None, additional_search_options=keywords)
-
-        if "sorry" in assistant_goal.lower():
-            print_to_chat(f"Sorry, no element found. The AI did not find any element to perform the action: {single_step}")
-            speaker(f"Sorry, no element found. Check if its on the screen.")
-            time.sleep(1)
-
-        best_coordinates = [{"role": "user",
-                             f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
-                                         f"predicted coordinates of the mouse click position to the center of the element object "
-                                         f"in this exact format: \"x=, y=\" to achieve the goal.\n{assistant_goal}"},
-                            {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=0.0)
-        print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
-    else:
-        speaker(f"Clicking onto the element without visioning context.")
-        generate_keywords = [{"role": "user",
-                              "content": f"You are an AI Agent called keyword Element Generator that receives the description "
-                                         f"of the goal and only respond with the single word list separated by commas of the specific UI elements keywords."
-                                         f"Example: \"search bar\" must be \"search\" without \"bar\". Always spell the numbers and include nouns. Do not include anything more than the Keywords."},
-                             {"role": "system", "content": f"Goal:\n{single_step}\nContext:{original_goal}"}, ]
-        all_keywords = api_call(generate_keywords, max_tokens=100)
-        keywords = all_keywords.replace("click, ", "").replace("Click, ", "")
-        keywords_in_goal = re.search(r"'(.*?)'", single_step)
-        if keywords_in_goal:
-            if len(keywords_in_goal.group(1).split()) == 1:
-                pass
-            else:
-                keywords = keywords_in_goal.group(1) + ", " + keywords.replace("click, ", "").replace("Click, ", "")
-        print_to_chat(f"\nKeywords: {keywords}\n")
-        analyzed_ui = analyze_app(application_name_contains=app_name, size_category=None,
-                                  additional_search_options=keywords)
-
-        best_coordinates = [{"role": "user",
-            f"content": f"You are an AI Windows Mouse Agent that can interact with the mouse. Only respond with the "
-                        f"predicted coordinates of the mouse click position to the center of the element object "
-                        f"in this exact format: \"x=, y=\" to achieve the goal."},
-            {"role": "system", "content": f"Goal: {single_step}\n\nContext:{original_goal}\n{analyzed_ui}"}]
-        last_coordinates = api_call(best_coordinates, max_tokens=100, temperature=0.0)
-        print_to_chat(f"AI decision coordinates: \'{last_coordinates}\'")
-
-    if "x=, y=" in last_coordinates:
-        speaker(f"Sorry, no element found. Probably bot blocked.")
-        return None
-    # Clicking the element
-    coordinates = {k.strip(): float(v.strip()) for k, v in
-                   (item.split('=') for item in last_coordinates.split(','))}
-    x = coordinates['x']
-    y = coordinates['y']
-    pyautogui.moveTo(x, y, 0.5, pyautogui.easeOutQuad)
-    if double_click:
-        pyautogui.click(x, y, clicks=2)
-    else:
-        if dont_click is False:
-            if right_click:
-                pyautogui.rightClick(x, y)
-            else:
-                if hold_key:
-                    pyautogui.keyDown(hold_key)
-                    pyautogui.click(x, y)
-                    pyautogui.keyUp(hold_key)
-                else:
-                    pyautogui.click(x, y)
+    attempt = 0
+    executed_actions = executed_actions or []
+    
+    while attempt < max_attempts:
+        # Check for stop request before generating next action
+        if is_stop_requested():
+            # Check if it's a pause request
+            from utils import get_app_instance
+            app = get_app_instance()
+            if app and app.paused_execution:
+                app.paused_actions = executed_actions
+                return "Task paused: Waiting for resume"
+            return "Task incomplete: Execution stopped by user"
+            
+        action_context = create_action_context(
+            original_goal,
+            executed_actions,
+            app_context,
+            keyboard_shortcuts,
+            app_name
+        )
+        
+        action_key = f"{app_name}_{original_goal}_{attempt}"
+        if action_key not in action_cache:
+            result = imaging(
+                window_title=app_name,
+                additional_context=action_context,
+                screenshot_size='Full screen'
+            )['choices'][0]['message']['content']
+            action_cache[action_key] = result
         else:
-            print_to_chat("AI skipping the click step.")
-            pass
-    if modify_element:
-        print_to_chat(f"Modifying the element with the text: {single_step}")
-    # jitter_mouse(x, y)  # ToDo: simulate human jitter.
-    if "save as" in single_step.lower():
-        print_to_chat("Saving as")
-        jitter_mouse(x, y)
-        pyautogui.mouseDown(x, y)
-        time.sleep(0.12)
-        pyautogui.mouseUp(x, y)
-        print_to_chat("Click action performed")
-    return last_coordinates
+            result = action_cache[action_key]
+            
+        task_completed, next_action = parse_assistant_result(result)
+        
+        if task_completed:
+            return "Task completed. Can I help you with something else?"
+        
+        print_to_chat(f"Next action: {next_action}")
 
+        if next_action:
+            success = execute_optimized_action(next_action)
+            
+            if not success:
+                print_to_chat("Action execution failed!")
+                speaker("Action execution failed")
+                try:
+                    action_data = json.loads(next_action)
+                    action = action_data['actions'][0]
+                    executed_actions.append(f"FAILED - {action['act']}: {action['step']}")
+                except Exception as e:
+                    executed_actions.append(f"FAILED - {str(next_action)}")
+                return "Task incomplete: Action execution failed"
+            
+            try:
+                action_data = json.loads(next_action)
+                action = action_data['actions'][0]
+                repeat_str = f", repeat: {action.get('repeat', 1)}" if action.get('repeat', 1) and action.get('repeat', 1) > 1 else ", repeat: 1"
+                executed_actions.append(f"{action['act']}: {action['step']} at {action.get('coordinates', 'N/A')}{repeat_str}")
+            except Exception as e:
+                print_to_chat(f"Error parsing action JSON: {str(e)}")
+                executed_actions.append(str(next_action))
+            
+            time.sleep(action_delay)
+            
+        attempt += 1
+    
+    return "Task incomplete! Task execution aborted!"
 
-def get_application_title(goal="", last_step=None, actual_step=None, focus_window=False):
-    if actual_step:
-        print_to_chat(f"Getting the application name from the actual step: {actual_step}")
-    goal_app = [{"role": "user",
-                 "content": f"You are an AI assistant called App Selector that receives a list of programs and responds only respond with the best match  "
-                            f"program of the goal. Only respond with the window name or the program name. For search engines and social networks use Microsoft Edge or Firefox.\n"
-                            f"Open programs:\n{last_programs_list(focus_last_window=focus_window)}\nAll installed programs:\n{get_installed_apps_registry()}\nIf no suitable application is found in the provided lists, explicitly choose 'Firefox'."},
-                {"role": "system", "content": f"Goal: {goal}\nAll installed programs:\n{get_installed_apps_registry()}"}]
-    app_name = api_call(goal_app, max_tokens=100)
-    print_to_chat(f"AI selected application: {app_name}")
-    filtered_matches = re.findall(r'["\'](.*?)["\']', app_name)
-    if filtered_matches and filtered_matches[0]:
-        app_name = filtered_matches[0]
-        print_to_chat(app_name)
-    if "command prompt" in app_name.lower():
-        app_name = "cmd"
-    elif "calculator" in app_name.lower():
-        app_name = "calc"
-    elif "sorry" in app_name:
-        app_name = get_focused_window_details()[3].strip('.exe')
-        print_to_chat(f"Using the focused window \"{app_name}\" for context.")
-        speaker(f"Using the focused window \"{app_name}\" for context.")
-    return app_name
-
-def get_ocr_match(goal, ocr_match=enable_ocr):
-    if ocr_match:
-        print_to_chat(f"OCR IS ENABLED")
-        word_prioritizer_assistant = [{"role": "user",
-                                       "content": f"You are an AI Agent called OCR Word Prioritizer that only responds with the best of the goal.\n"
-                                                  f"Do not respond with anything else than the words that match the goal. If no words match the goal, respond with \"\"."},
-                    {"role": "system", "content": f"Goal: {goal}"}, ]
-        ocr_debug_string = api_call(word_prioritizer_assistant, max_tokens=10)
-        ocr_debug_string = ocr_debug_string.split(f"\'")[0]
-        print_to_chat(f"OCR Words to search: \'{ocr_debug_string}\'")
-        ocr_match = find_probable_click_position(ocr_debug_string)
-        ocr_msg = f"\nOCR Result: \"{ocr_match['text']}\" Located at \"x={ocr_match['center'][0]}, y={ocr_match['center'][1]}\".\n"
-        return ocr_msg
-    else:
-        ocr_msg = ""
-        return ocr_msg
-
-
-def jitter_mouse(x, y, radius=5, duration=0.6):
-    # Move the mouse in a small circle around (x, y) to simulate a jitter.
-    end_time = time.time() + duration
-    while time.time() < end_time:
-        jitter_x = x + random.uniform(-radius, radius)
-        jitter_y = y + random.uniform(-radius, radius)
-        pyautogui.moveTo(jitter_x, jitter_y, duration=0.1)
-    return
-
-
-def control_mouse(generated_coordinates, double_click=None, goal=""):
-    print_to_chat(f"Mouse coordinates: {generated_coordinates}")
-    coordinates = {k.strip(): int(v.strip()) for k, v in
-                   (item.split('=') for item in generated_coordinates.split(','))}
-    x = coordinates['x']
-    y = coordinates['y']
-    pyautogui.moveTo(x, y, 0.5, pyautogui.easeOutQuad)
-    pyautogui.click(x, y)
-    # jitter_mouse(x, y)
-    if "save as" in goal.lower():
-        print_to_chat("Saving as")
-        jitter_mouse(x, y)
-        pyautogui.mouseDown(x, y)
-        time.sleep(0.12)
-        pyautogui.mouseUp(x, y)
-        print_to_chat("Click action performed")
-    else:
-        pyautogui.click(x, y, clicks=1)
-    if double_click:
-        time.sleep(0.2)
-        pyautogui.click(x, y, clicks=2)
-
-
-def is_field_input_area_active():
-    active_window_title = gw.getActiveWindow().title
+def execute_optimized_action(action_json):
+    """Execute action using coordinates from the action JSON."""
     try:
-        app = Application().connect(title=active_window_title)
-        window = app[active_window_title]
-        # Loop through all the child windows and check if any of them are text boxes
-        for child in window.children():
-            if 'Edit' in child.class_name() or 'RichEdit' in child.class_name():
-                # This is a text box, also add text input areas that are not text boxes
-                if child.has_keyboard_focus():
+        if isinstance(action_json, str):
+            action_json = action_json.replace('```json', '').replace('```', '').strip()
+            start_idx = action_json.find('{')
+            end_idx = action_json.rfind('}') + 1
+            if start_idx != -1 and end_idx != -1:
+                action_json = action_json[start_idx:end_idx]
+        
+        instructions = json.loads(action_json)
+        action = instructions.get('actions', [{}])[0]
+        
+        if 'act' not in action or 'step' not in action:
+            raise ValueError("Invalid action format: missing 'act' or 'step'")
+        
+        # Handle null/None repeat values
+        try:
+            repeat = max(1, int(action.get('repeat', 1)))
+        except (ValueError, TypeError):
+            repeat = 1
+        
+        coordinates_str = action.get('coordinates', '')
+        x = y = None
+        
+        if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
+            try:
+                # For drag action, parse both start and end coordinates
+                if action['act'] == "drag" and "," in coordinates_str:
+                    start_coords, end_coords = coordinates_str.split(" to ")
+                    start_x, start_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', start_coords)[0])
+                    end_x, end_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', end_coords)[0])
+                    x, y = start_x, start_y  # Store start position in x,y
+                    action['end_pos'] = (end_x, end_y)  # Store end position
+                else:
+                    coordinates = {k.strip(): float(v.strip()) for k, v in 
+                               (item.split('=') for item in coordinates_str.split(','))}
+                    x, y = coordinates['x'], coordinates['y']
+            except Exception as e:
+                print_to_chat(f"Error parsing coordinates: {e}")
+                return False
+
+        def repeat_action(func):
+            """Helper function to repeat an action multiple times."""
+            try:
+                for _ in range(repeat):
+                    if not func():
+                        return False
+                    if repeat > 1:
+                        time.sleep(0.5)
+                return True
+            except Exception as e:
+                print_to_chat(f"Error in repeat_action: {str(e)}")
+                return False
+
+        def handle_text_entry():
+            """Handle text entry with Vietnamese language support."""
+            message_writer_agent = [{
+                "role": "user",
+                "content":  f"You're an AI Agent called Writer that processes the goal and only returns the final text goal.\n"
+                           f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines.\n"
+                           f"If the goal is a link, media or a search string, just return the result string."
+            }, {
+                "role": "system",
+                "content": f"Goal: {action['step']}"
+            }]
+            
+            text_to_write = api_call(message_writer_agent, max_tokens=200)
+            
+            def write_once():
+                try:
+                    import pyperclip
+                    original_clipboard = pyperclip.paste()  # Save current clipboard
+                    try:
+                        pyperclip.copy(text_to_write)
+                        pyautogui.hotkey('ctrl', 'v')
+                    finally:
+                        # Restore original clipboard content
+                        pyperclip.copy(original_clipboard)
                     return True
-        return False
+                except Exception as e:
+                    print_to_chat(f"Error writing text: {str(e)}")
+                    return False
+
+            return repeat_action(write_once)
+        
+        def handle_open_app():
+            app_title = get_application_title(action['step'])
+            if app_title is None:
+                print_to_chat(f"Could not find application: {action['step']}")
+                return False
+            return activate_window_title(app_title)
+
+        def perform_drag_action(start_x, start_y, end_x, end_y):
+            """Perform drag action from start to end coordinates."""
+            try:
+                # Move to start position
+                move_mouse(start_x, start_y)
+                time.sleep(0.2)  # Small delay before clicking
+                
+                # Press and hold mouse button
+                pyautogui.mouseDown()
+                time.sleep(0.2)  # Small delay before dragging
+                
+                # Drag to end position
+                move_mouse(end_x, end_y, duration=1.0)  # Slower movement for drag
+                time.sleep(0.2)  # Small delay before release
+                
+                # Release mouse button
+                pyautogui.mouseUp()
+                return True
+            except Exception as e:
+                print_to_chat(f"Error performing drag action: {e}")
+                pyautogui.mouseUp()  # Ensure mouse is released
+                return False
+
+        action_map = {
+            "move_to": lambda: move_mouse(x, y) if x is not None and y is not None else False,
+            "click_element": lambda: perform_mouse_action(x, y, "single", repeat) if x is not None and y is not None else False,
+            "right_click": lambda: perform_mouse_action(x, y, "right", repeat) if x is not None and y is not None else False,
+            "double_click_element": lambda: perform_mouse_action(x, y, "double", repeat) if x is not None and y is not None else False,
+            "drag": lambda: repeat_action(perform_drag_action(x, y, action['end_pos'][0], action['end_pos'][1])) if x is not None and y is not None and 'end_pos' in action else False,
+            "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['step'])),
+            "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['step'].split(" and click ")[0]) if x is not None and y is not None else False,
+            "text_entry": handle_text_entry,
+            "scroll": lambda: repeat_action(lambda: scroll(action['step'])),
+            "open_app": handle_open_app,
+            "time_sleep": lambda: repeat_action(time.sleep(float(action['step']))) if action['step'].isdigit() else 1,
+            "execute_rpa_task": lambda: execute_rpa_task(action['step'], repeat)
+        }
+        
+        if action['act'] in action_map:
+            success = action_map[action['act']]()
+            # Only check coordinates for non-text_entry actions
+            if success is False :
+                if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
+                    print_to_chat("Failed to execute action with provided coordinates")
+                    return False
+                elif action['act'] == "open_app":
+                    return False
+            return True
+        else:
+            print_to_chat(f"WARNING: Unrecognized action '{action['act']}'.")
+            return False
+        
     except Exception as e:
-        print_to_chat(f"Error: {e}")
+        print_to_chat(f"Error executing action: {str(e)}")
         return False
 
+def move_mouse(x, y, duration=0.5, ease_function=pyautogui.easeOutQuad):
+    """Move mouse to specific coordinates with customizable duration and easing."""
+    pyautogui.moveTo(x, y, duration, ease_function)
 
-def write_action(goal=None, assistant_identity="", press_enter=False, app_name="", original_goal=None, last_step=""):
-    assistant_identity_msg = f"\n{assistant_identity}" if assistant_identity else ""
-    message_writer_agent = [
-        {"role": "user", f"content": f"You're an AI Agent called Writter that processes the goal and only returns the final text goal.{assistant_identity_msg}\n"
-                                          f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines."
-                                          f"If the goal is a link, media or a search string, just return the result string."
-                                          f"Do not respond with 'As an AI language model, I dont have capabilities...' as you can actually do it.\n"},
-        {"role": "system", "content": f"Goal: {goal}"}, ]
-    message_to_write = api_call(message_writer_agent, max_tokens=200)
-    if "click on" in goal.lower() or "click the" in goal.lower() or "click" in goal.lower():
-        print_to_chat("Found to click on the goal.")
-        if not is_field_input_area_active():
-            print_to_chat("A text box is not active. Clicking on the target element.")
-            act(goal, app_name=app_name, original_goal=original_goal)
-    elif last_step is None or "text_entry" not in last_step:
-        print_to_chat(f"Focusing on the text input area: {goal}")
-        if not is_field_input_area_active():
-            act(goal, app_name=app_name, original_goal=original_goal)
+def click_mouse(click_type="single", repeat=1, interval=0.1):
+    """Perform mouse clicks with specified type and repeat count."""
+    current_x, current_y = pyautogui.position()
+    
+    for _ in range(repeat):
+        if click_type == "single":
+            pyautogui.click(current_x, current_y)
+        elif click_type == "double":
+            pyautogui.doubleClick(current_x, current_y)
+        elif click_type == "right":
+            pyautogui.rightClick(current_x, current_y)
+        elif click_type == "hold":
+            pyautogui.mouseDown(current_x, current_y)
+            time.sleep(0.12)
+            pyautogui.mouseUp(current_x, current_y)
+            
+        if repeat > 1:
+            time.sleep(interval)
 
-    pyautogui.typewrite(message_to_write, interval=0.01)
-    if "press enter" in goal.lower() or "press the enter" in goal.lower() or "\'enter\'" in goal.lower() or "\"enter\"" in goal.lower() or press_enter is True:
-        print_to_chat("Found to press the enter key in the goal.")
-        pyautogui.press('enter')
-    else:
-        print_to_chat("AI no \"enter\" key press being made.")
-
+def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1):
+    """Combined function to move mouse and perform click actions."""
+    move_mouse(x, y)
+    click_mouse(action_type, repeat, interval)
 
 def perform_simulated_keypress(press_key):
-    # Define a pattern that matches the allowed keys, including function and arrow keys
+    """Perform keyboard actions with support for multiple keys."""
     keys_pattern = (r'\b(Win(?:dows)?|Ctrl|Alt|Shift|Enter|Space(?:\s*Bar)?|Tab|Esc(?:ape)?|Backspace|Insert|Delete|'
                     r'Home|End|Page\s*Up|Page\s*Down|(?:Arrow\s*)?(?:Up|Down|Left|Right)|F1|F2|F3|F4|F5|F6|F7|F8|F9|'
                     r'F10|F11|F12|[A-Z0-9])\b')
     keys = re.findall(keys_pattern, press_key, re.IGNORECASE)
-    # Normalize key names as required by pyautogui
+    
     key_mapping = {
         'win': 'winleft',
         'windows': 'winleft',
@@ -1050,19 +681,176 @@ def perform_simulated_keypress(press_key):
         'arrowright': 'right',
         'spacebar': 'space',
     }
+    
     pyautogui_keys = [key_mapping.get(key.lower().replace(' ', ''), key.lower()) for key in keys]
+    
     for key in pyautogui_keys:
         pyautogui.keyDown(key)
     for key in reversed(pyautogui_keys):
         pyautogui.keyUp(key)
-    print_to_chat(f"Performed simulated key presses: {press_key}")
 
+def scroll(target):
+    # Parse scroll direction from target element description
+    scroll_amount = 850  # Base scroll amount
+    
+    if any(term in target.lower() for term in ['up', 'top']):
+        scroll_direction = 1  # Positive for up
+    elif any(term in target.lower() for term in ['down', 'bottom']):
+        scroll_direction = -1  # Negative for down
+    elif any(term in target.lower() for term in ['right']):
+        scroll_direction = -1  # Horizontal scroll right
+        pyautogui.hscroll = True
+    elif any(term in target.lower() for term in ['left']):
+        scroll_direction = 1  # Horizontal scroll left
+        pyautogui.hscroll = True
+    else:
+        scroll_direction = -1  # Default to scroll down
+            
+    # Perform scroll action
+    if hasattr(pyautogui, 'hscroll') and pyautogui.hscroll:
+        pyautogui.hscroll(scroll_amount * scroll_direction)
+    else:
+        pyautogui.scroll(scroll_amount * scroll_direction)
 
-def calculate_duration_of_speech(text, lang='en', wpm=150):
-    duration_in_seconds = (len(text.split()) / wpm) * 60
-    return int(duration_in_seconds * 1000)  # Convert to milliseconds for tkinter's after method
+    time.sleep(0.3)  # Wait for scroll to complete
 
+def execute_rpa_task(task_name, repeat=1):
+    """Execute a saved RPA task by finding task names in the step description"""
+    try:
+        # Load all available tasks
+        tasks = load_tasks()
+        
+        # Look for any task names in the step description that match our task keys
+        found_tasks = []
+        for task_key in tasks.keys():
+            if task_key in task_name:
+                found_tasks.append(task_key)
+                
+        if not found_tasks:
+            print_to_chat(f"No known task names found in: {task_name}")
+            return False
+            
+        # Execute each found task
+        for task_key in found_tasks:
+            print_to_chat(f"Executing task: {task_key}")
+            task_data = tasks[task_key]
+            
+            if isinstance(task_data, dict):
+                actions = task_data.get('actions', [])
+            else:
+                # Handle legacy format
+                actions = task_data
+                
+            if not actions:
+                print_to_chat(f"No actions found for task: {task_key}")
+                continue
+                
+            for _ in range(repeat):
+                for action in actions:
+                    if is_stop_requested():
+                        return False
+                        
+                    success = execute_optimized_action(json.dumps({"actions": [action]}))
+                    if not success:
+                        print_to_chat(f"Failed to execute action in task {task_key}")
+                        return False
+                        
+                    # Get delay from settings
+                    from assistant import load_settings
+                    settings = load_settings()
+                    action_delay = settings.get("action_delay", 1.5)
+                    time.sleep(action_delay)
+                    
+        return True
+        
+    except Exception as e:
+        print_to_chat(f"Error executing RPA task: {str(e)}")
+        return False
 
+def fast_act(single_step, app_name="", original_goal="", action_type="single", repeat=1):
+    """Optimized fast action execution using only screenshot context."""
+    if not app_name:
+        app_name = activate_window_title(focus_topmost_window())
+    else:
+        app_name = activate_window_title(app_name)
+
+    # Create minimal context for coordinate finding
+    coordinate_context = (
+        f"You are an AI Windows Mouse Agent. Based on the screenshot of {app_name}, find the coordinates of: {single_step}\n"
+        f"Only respond with the coordinates in this exact format: \"x=<value>, y=<value>\""
+    )
+    
+    # Get coordinates from screenshot
+    result = imaging(
+        window_title=app_name,
+        additional_context=coordinate_context,
+        screenshot_size='Full screen'
+    )['choices'][0]['message']['content']
+    
+    try:
+        # Parse coordinates
+        coordinates = {k.strip(): float(v.strip()) for k, v in 
+                      (item.split('=') for item in result.split(','))}
+        x, y = coordinates['x'], coordinates['y']
+        
+        # Perform mouse action
+        if action_type == "move":
+            move_mouse(x, y)
+        else:
+            perform_mouse_action(x, y, action_type, repeat)
+            
+        return result
+        
+    except Exception as e:
+        print_to_chat(f"Error performing fast action: {e}")
+        return None
+
+def write_action(goal=None, press_enter=False, app_name="", original_goal=None, last_step=""):
+    # Generate text content
+    message_writer_agent = [{
+        "role": "user",
+        "content":  f"You're an AI Agent called Writer that processes the goal and only returns the final text goal.\n"
+                    f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines."
+                    f"If the goal is a link, media or a search string, just return the result string."
+    }, {
+        "role": "system",
+        "content": f"Goal: {goal}"
+    }]
+    
+    message_to_write = api_call(message_writer_agent, max_tokens=200)
+    
+    # Handle click actions if needed
+    if any(click_term in goal.lower() for click_term in ["click on", "click the", "click"]):
+        print_to_chat("Found to click on the goal.")
+        if not is_field_input_area_active():
+            print_to_chat("A text box is not active. Clicking on the target element.")
+            fast_act(goal, app_name=app_name, original_goal=original_goal)
+    elif last_step is None or "text_entry" not in last_step:
+        print_to_chat(f"Focusing on the text input area: {goal}")
+        if not is_field_input_area_active():
+            fast_act(goal, app_name=app_name, original_goal=original_goal)
+
+    # Type the text with Vietnamese support
+    try:
+        import pyperclip
+        original_clipboard = pyperclip.paste()  # Save current clipboard
+        try:
+            pyperclip.copy(message_to_write)
+            pyautogui.hotkey('ctrl', 'v')
+        finally:
+            # Restore original clipboard content
+            pyperclip.copy(original_clipboard)
+    except Exception as e:
+        print_to_chat(f"Error writing text: {str(e)}")
+    
+    # Handle enter key press if needed
+    if any(enter_term in goal.lower() for enter_term in ["press enter", "press the enter", "'enter'", '"enter"']) or press_enter:
+        print_to_chat("Found to press the enter key in the goal.")
+        pyautogui.press('enter')
+    else:
+        print_to_chat("AI no \"enter\" key press being made.")
+
+# Database functions
 def create_database(database_file):
     """Create the database and the required table."""
     conn = sqlite3.connect(database_file)
@@ -1078,10 +866,9 @@ def create_database(database_file):
     ''')
     conn.commit()
     conn.close()
-database_file = r'history.db'
-create_database(database_file)
 
 def database_add_case(database_file, app_name, goal, instructions):
+    """Add a case to the database."""
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
     try:
@@ -1095,8 +882,8 @@ def database_add_case(database_file, app_name, goal, instructions):
     finally:
         conn.close()
 
-
 def print_database(database_file):
+    """Print all cases in the database."""
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM app_cases')
@@ -1105,32 +892,10 @@ def print_database(database_file):
         print_to_chat(row)
     conn.close()
 
+# Initialize database
+database_file = r'history.db'
+create_database(database_file)
 
-def update_instructions_with_action_string(instructions, action_string, target_step):
-    # Check for both 'actions' and 'steps' keys
-    if 'actions' in instructions:
-        action_list = instructions['actions']
-    elif 'steps' in instructions:
-        action_list = instructions['steps']
-    else:
-        return instructions  # Return original instructions if neither key is found
-
-    for action in action_list:
-        if action.get("act") == "click_element" and action.get("step") == target_step:
-            action['additional_info'] = action_string
-    return instructions
-
-
-# Example Usage:
+# Example Usage
 if __name__ == "__main__":
-    assistant(assistant_goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge", execute_json_case=json_case_example)
-    assistant(assistant_goal="Open a new tab the song 'Wall Of Eyes - The Smile', from google search results filter by videos then play it on Microsoft Edge")
-    # Debugging using prompt:
-    # assistant(assistant_goal="Open Spotify and play the song daft punk one more time", app_name="spotify")
-    # assistant(assistant_goal="Play the song \'Weird Fishes - Radiohead\' on Spotify")
-    # assistant(assistant_goal="Create a short greet text for the user using AI Automated Windows in notepad")
-    # assistant(assistant_goal=f"Open a new tab and play the song Windows 95 but it's a PHAT hip hop beat from google search results filter by videos", app_name="microsoft edge")
-    # assistant(f"Send a list of steps to make a chocolate cake to my saved messages in Telegram")
-    # assistant(assistant_goal="On Microsoft Edge play Evangelion on Netflix", app_name="microsoft edge", execute_json_case=netflix)
-    # assistant(assistant_goal="Play Rei Theme on Spotify")
-    # assistant(assistant_goal="Make a hello world post on Twitter", app_name="chrome")
+    assistant(assistant_goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge")

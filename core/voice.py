@@ -1,10 +1,10 @@
-from gtts import gTTS
 import tempfile
 import threading
 import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 import tkinter as tk
+from gtts import gTTS
 
 # Initialize Pygame's mixer
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
@@ -51,16 +51,16 @@ class TransparentSubtitlesWindow:
         self.root.quit()
 
 def calculate_duration_of_speech(text, lang='en', wpm=150):
-    # Estimate the duration the subtitles should be displayed based on words per minute (WPM)
+    """Estimate the duration the subtitles should be displayed based on words per minute (WPM)"""
     words = text.split()
     word_count = len(words)
+    # Adjust WPM for Vietnamese (generally slower than English)
+    if lang == 'vi':
+        wpm = 120
     duration_in_seconds = (word_count / wpm) * 60
     return int(duration_in_seconds * 1000)  # Convert to milliseconds for tkinter's after method
 
-def play_audio(file_path, text, lang='en'):
-    # Estimate the duration the subtitles should be shown
-    duration = calculate_duration_of_speech(text, lang)
-
+def play_audio(file_path):
     # Load and play audio file
     pygame.mixer.music.load(file_path)
     pygame.mixer.music.set_volume(volume)
@@ -81,9 +81,14 @@ def set_subtitles(subtitles_bool):
     global subtitles
     subtitles = subtitles_bool
 
-def speaker(text, lang='en'):
+def speaker(text, additional_text=None, lang='en'):
     # Initialize all of pygame's modules
     pygame.init()
+
+    from utils import app_instance, translate
+    if app_instance is not None:
+        lang = getattr(app_instance, 'current_language', 'en')
+        text = f"{translate(text, lang)}{f" {translate(additional_text, lang)}" if additional_text else ''}"
 
     # Temporary mp3 file creation
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
@@ -105,7 +110,7 @@ def speaker(text, lang='en'):
         subtitles_thread = None
 
     # Start the audio thread
-    audio_thread = threading.Thread(target=play_audio, args=(temp_file_path, text, lang))
+    audio_thread = threading.Thread(target=play_audio(temp_file_path))
     audio_thread.daemon = True
     audio_thread.start()
 

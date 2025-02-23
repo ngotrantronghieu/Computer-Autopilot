@@ -1,0 +1,1 @@
+{"llm_model": "gemini/gemini-2.0-flash", "api_key_env_name": "GEMINI_API_KEY", "vision_llm_model": "gemini/gemini-2.0-flash", "vision_api_key_env_name": "GEMINI_API_KEY", "action_delay": 1.0, "max_attempts": 20, "start_with_windows": true}

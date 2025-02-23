@@ -48,7 +48,6 @@ def get_installed_apps_registry():
                         continue
     return installed_apps
 
-
 def get_open_windows():
     excluded_titles = ["AI Drone Assistant", "NVIDIA GeForce Overlay", "Windows Input Experience", "Program Manager"]
     excluded_executables = ["NVIDIA Share.exe", "TextInputHost.exe", "Tk.exe", "conhost.exe", "explorer.exe",
@@ -79,19 +78,16 @@ def get_open_windows():
     open_windows_info.sort(key=lambda x: x[1][1], reverse=True)
     return [info[:-1] for info in open_windows_info]  # Exclude the window object from the returned info
 
-
 def get_window_text(hwnd):
     length = GetWindowTextLength(hwnd) + 1
     buffer = ctypes.create_unicode_buffer(length)
     GetWindowText(hwnd, buffer, length)
     return buffer.value
 
-
 def get_active_window_title():
-    time.sleep(1) # Wait for the window to be fully active
+    time.sleep(1) # Wait for the window to be fully active ToDo: Fix this part!
     hwnd = GetForegroundWindow()
     return get_window_text(hwnd)
-
 
 def enum_windows_proc(hwnd, lParam):
     if IsWindowVisible(hwnd):
@@ -100,13 +96,11 @@ def enum_windows_proc(hwnd, lParam):
             hwnd_list.append((hwnd, title))
     return True
 
-
 def open_windows_info():
     global hwnd_list
     hwnd_list = []
     EnumWindows(EnumWindowsProc(enum_windows_proc), 0)
     return hwnd_list
-
 
 def find_window(partial_title):
     windows = open_windows_info()
@@ -115,7 +109,6 @@ def find_window(partial_title):
             return hwnd
     return None
 
-
 def find_window_by_title(partial_title):
     windows = open_windows_info()
     for hwnd, title in windows:
@@ -123,14 +116,12 @@ def find_window_by_title(partial_title):
             return hwnd, title
     return None, None
 
-
 def bring_to_foreground(hwnd):
     if IsIconic(hwnd):
         ShowWindow(hwnd, SW_RESTORE)
     else:
         ShowWindow(hwnd, SW_SHOW)
     SetForegroundWindow(hwnd)
-
 
 def search_registry_for_application(app_name):
     sub_keys = [
