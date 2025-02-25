@@ -138,7 +138,7 @@ def get_installed_apps_ms_store():
     except Exception as e:
         print_to_chat(f"Error getting installed apps from Microsoft Store: {e}")
         return ""
-    
+
 def get_application_title(goal="", last_step=None, actual_step=None, focus_window=False):
     """Get the most appropriate application title for the given goal."""
     if actual_step:
@@ -149,25 +149,19 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
         
     goal_app = [{
         "role": "user",
-        "content":  f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language.\n"
-                    f"You will be given a goal that the user want to achieve and lists of programs including all the programs installed on the user's windows and the programs that are currently being opened.\n"
-                    f"Based on these, decide if the goal require an app from the lists to be opened or focused on.\n"
-                    f"If no app needed to be opened or be focused on to achieve the goal, respond with 'NO_APP'.\n"
-                    f"If the goal require an app to be opened or be focused on: Only respond with the window name or the program name needed to be opened or be focused on without the ending extension.\n\n"
-                    f"Here are the lists:\n"
-                    f"All installed programs (Registry):\n{installed_apps_registry}.\n"
-                    f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}.\n"
-                    f"Opened programs:\n{last_programs_list(focus_last_window=focus_window)}.\n"
-                    f"If no suitable application is found in the provided lists or no app needed to be opened to achieve the goal, respond with 'NO_APP'."
+        "content":  f"You are an AI Assistant called App Selector that receives a list of programs and responds only with the most suitable program to achieve the goal.\n"
+                    f"Only respond with the window name or the program name without the ending extension.\n"
+                    f"If no suitable application is found in the provided lists, respond with 'NO_APP'.\n"
+                    f"Opened programs:\n{last_programs_list(focus_last_window=focus_window)}\n"
+                    f"All installed programs (Registry):\n{installed_apps_registry}\n"
+                    f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}"
     }, {
         "role": "system",
         "content":  f"Goal: {goal}\n"
     }]
 
-    app_name = api_call(goal_app, max_tokens=100).strip('.exe')
-    print_to_chat(f"Selected Application: {app_name}")
+    app_name = api_call(goal_app, max_tokens=100)
     
-    # Nếu không tìm thấy ứng dụng phù hợp, trả về None ngay lập tức
     if "NO_APP" in app_name:
         print_to_chat("No suitable application found.")
         return None
@@ -175,8 +169,12 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
     filtered_matches = re.findall(r'["\'](.*?)["\']', app_name)
     if filtered_matches and filtered_matches[0]:
         app_name = filtered_matches[0]
-        print_to_chat(app_name)
-        
+    
+    if app_name.lower().endswith('.exe'):
+        app_name = app_name[:-4]
+
+    print_to_chat(f"Selected Application: {app_name}")
+
     if "command prompt" in app_name.lower():
         app_name = "cmd"
     elif "calculator" in app_name.lower():
@@ -246,14 +244,31 @@ def get_available_rpa_tasks():
             
     return "\n\n".join(task_list)
 
-def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, app_name):
+def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts):
     """Create action context using screenshot information and UI analysis."""
-    previous_actions = "\n".join(f"{i+1}. {action}" for i, action in enumerate(executed_actions)) if executed_actions else ""
+    # Format previous actions to pair assistant messages with their corresponding actions
+    previous_actions_formatted = []
+    i = 0
+    while i < len(executed_actions):
+        # Check if current item is a response message
+        if i < len(executed_actions) and executed_actions[i].startswith("RESPONSE_MESSAGE:"):
+            response_message = executed_actions[i][len("RESPONSE_MESSAGE:"):].strip()
+            
+            # Check if next item is an action
+            if i + 1 < len(executed_actions) and not executed_actions[i + 1].startswith("RESPONSE_MESSAGE:"):
+                action_detail = executed_actions[i + 1]
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Assistant: {response_message}\nAction: {action_detail}")
+                i += 2  # Skip both the message and action
+            else:
+                # If there's no corresponding action, just add the message
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Assistant: {response_message}")
+                i += 1
+        else:
+            # If it's an action without a preceding message
+            previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Action: {executed_actions[i]}")
+            i += 1
     
-    # Get UI analysis
-    if app_name:
-        ui_analysis = analyze_app(app_name)
-        ui_elements = f"UI Element Contexts:\n{ui_analysis}" if ui_analysis else ""
+    previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
 
     # Get screen resolution
     screen_width, screen_height = pyautogui.size()
@@ -274,6 +289,8 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
             f"Position: {window_pos}\n"
             f"Size: {window_size}"
         )
+        ui_analysis = analyze_app(window_title)
+        ui_elements = f"UI Element Contexts:\n{ui_analysis}" if ui_analysis else ""
     else:
         focused_window_info = "Focused Window Details: There are no details about the focused window."
 
@@ -281,12 +298,17 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
     rpa_tasks = get_available_rpa_tasks()
     rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are no available RPA tasks."
 
+    # Get installed applications
+    installed_apps_registry = get_installed_apps_registry()
+    installed_apps_ms_store = get_installed_apps_ms_store()
+
     return (
         f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language."
         f"You will be given a goal that the user want to achieve, a screenshot of the user current windows screen along with the previous actions you've performed. Based on these:\n"
         f"1. Determine if the goal has been achieved.\n"
         f"2. If the goal is not achieved: \n"
-        f"a. Generate a friendly response message to the user telling what you're doing or provide related responses related to the goal in the same language that the user is using in the goal.\n"
+        f"a. Generate a friendly response message including telling the user what you're doing along with some details for yourself in order to precisely continue generating following actions if needed."
+        f" Also provide the ui elements state or the results of your analysis if needed. Respond in the same language the user is using in the goal.\n"
         f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
         f"- If the task cannot be completed for some reasons, respond with STOP:<reasons>\n"
         f"b. If not paused or stopped, provide only ONE next action in order to continue achieving the goal:\n"
@@ -318,7 +340,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
         f"- text_entry: The specific text input to type or write. It can be a word, a sentence, a paragraph or an entire essay. (Example: \"Hello World\" or \"An essay about environment\").\n"
         f"- scroll: The direction to scroll. Each scroll action will scroll the screen for 850 pixels.\n"
-        f"- open_app: The application to open.\n"
+        f"- open_app: The application name to open or focus on.\n"
         f"- time_sleep: The duration to wait for.\n"
         f"- execute_rpa_task: The task name to execute. (Provide only the task name. Use this action to execute a saved RPA task).\n"
         f"{rpa_context}\n\n"
@@ -328,14 +350,17 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"3. Before providing any action other than click_element action on any application window, make sure a click_element action is performed beforehand to focus on that application window first.\n"
         f"4. Before providing any text_entry action, make sure a click_element action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
         f"5. Always prioritize using a keyboard action if it can replace a corresponding mouse action.\n"
-        f"5. Prioritze generating execute_rpa_task action if it can acheive the goal efficiently.\n\n"
-        f"Here is the goal the user want to acheive: {goal}\n"
+        f"6. Prioritize generating execute_rpa_task action if it can achieve the goal efficiently.\n\n"
+        f"Here is the goal the user want to achieve: {goal}\n"
         f"{f'Previous actions performed:\n{previous_actions}\n' if previous_actions else ''}\n"
         f"Additional Contexts:\n"
         f"{screen_info}\n"
         f"{focused_window_info}\n"
-        f"{f'Current Appplication UI Details:\nApplication Name: {app_name}\n{ui_elements}\n\n' if app_name else ''}"
+        f"{f'{ui_elements}\n\n' if ui_elements else ''}"
         f"{cursor_shape}\n"
+        f"All currently opened programs:\n{last_programs_list}\n"
+        f"All installed programs (Registry):\n{installed_apps_registry}\n"
+        f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n"
         f"Additional Guides:\n{app_context}\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
     )
 
@@ -377,7 +402,7 @@ def parse_assistant_result(result):
         
     return task_completed, next_action
 
-def assistant(assistant_goal="", executed_actions=None, additional_context=None, resumed=False, app_name=None, called_from=None):
+def assistant(assistant_goal="", executed_actions=None, additional_context=None, resumed=False, called_from=None):
     """Main assistant function for processing and executing user goals."""
     clear_stop()
     
@@ -397,16 +422,6 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             speaker(f"Assistant is analyzing the request:", additional_text=f"\"{original_goal}\".")
         else:
             speaker("Resuming task execution.")
-
-    if not app_name:
-        app_name = get_application_title(original_goal)
-    
-    if app_name is None:
-        print_to_chat("No appropriate application found or needed for this task")
-        speaker("No appropriate application found or needed for this task")
-    else:
-        app_name = activate_window_title(app_name)
-        print_to_chat(f"Analyzing: {app_name}")
 
     app_context = app_space_map(map='app_space')
     keyboard_shortcuts = app_space_map()
@@ -436,13 +451,11 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             executed_actions,
             app_context,
             keyboard_shortcuts,
-            app_name
         )
         
-        action_key = f"{app_name}_{original_goal}_{attempt}"
+        action_key = f"{original_goal}_{attempt}"
         if action_key not in action_cache:
             result = imaging(
-                window_title=app_name,
                 additional_context=action_context,
                 screenshot_size='Full screen'
             )['choices'][0]['message']['content']
@@ -451,6 +464,16 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             result = action_cache[action_key]
             
         task_completed, next_action = parse_assistant_result(result)
+        
+        # Store the response message in executed_actions
+        try:
+            lines = result.strip().split('\n')
+            for line in lines:
+                if line.startswith('RESPONSE_MESSAGE:'):
+                    executed_actions.append(line.strip())
+                    break
+        except Exception as e:
+            print_to_chat(f"Error storing response message: {e}")
         
         if task_completed:
             return "Task completed. Can I help you with something else?"
@@ -514,7 +537,7 @@ def execute_optimized_action(action_json):
         if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
             try:
                 # For drag action, parse both start and end coordinates
-                if action['act'] == "drag" and "," in coordinates_str:
+                if action['act'] == "drag" and " to " in coordinates_str:
                     start_coords, end_coords = coordinates_str.split(" to ")
                     start_x, start_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', start_coords)[0])
                     end_x, end_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', end_coords)[0])
@@ -579,11 +602,11 @@ def execute_optimized_action(action_json):
                 return False
             return activate_window_title(app_title)
 
-        def perform_drag_action(start_x, start_y, end_x, end_y):
+        def perform_drag_action():
             """Perform drag action from start to end coordinates."""
             try:
                 # Move to start position
-                move_mouse(start_x, start_y)
+                move_mouse(x, y)
                 time.sleep(0.2)  # Small delay before clicking
                 
                 # Press and hold mouse button
@@ -591,6 +614,7 @@ def execute_optimized_action(action_json):
                 time.sleep(0.2)  # Small delay before dragging
                 
                 # Drag to end position
+                end_x, end_y = action['end_pos']
                 move_mouse(end_x, end_y, duration=1.0)  # Slower movement for drag
                 time.sleep(0.2)  # Small delay before release
                 
@@ -607,20 +631,20 @@ def execute_optimized_action(action_json):
             "click_element": lambda: perform_mouse_action(x, y, "single", repeat) if x is not None and y is not None else False,
             "right_click": lambda: perform_mouse_action(x, y, "right", repeat) if x is not None and y is not None else False,
             "double_click_element": lambda: perform_mouse_action(x, y, "double", repeat) if x is not None and y is not None else False,
-            "drag": lambda: repeat_action(perform_drag_action(x, y, action['end_pos'][0], action['end_pos'][1])) if x is not None and y is not None and 'end_pos' in action else False,
+            "drag": lambda: repeat_action(perform_drag_action) if x is not None and y is not None and 'end_pos' in action else False,
             "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['step'])),
             "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['step'].split(" and click ")[0]) if x is not None and y is not None else False,
             "text_entry": handle_text_entry,
             "scroll": lambda: repeat_action(lambda: scroll(action['step'])),
             "open_app": handle_open_app,
-            "time_sleep": lambda: repeat_action(time.sleep(float(action['step']))) if action['step'].isdigit() else 1,
+            "time_sleep": lambda: repeat_action(lambda: time.sleep(float(action['step']))) if action['step'].isdigit() else 1,
             "execute_rpa_task": lambda: execute_rpa_task(action['step'], repeat)
         }
-        
+
         if action['act'] in action_map:
             success = action_map[action['act']]()
             # Only check coordinates for non-text_entry actions
-            if success is False :
+            if success is False:
                 if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
                     print_to_chat("Failed to execute action with provided coordinates")
                     return False
