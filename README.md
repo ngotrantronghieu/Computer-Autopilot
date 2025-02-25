@@ -14,6 +14,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 - Supports all Win32api applications including: Microsoft Edge, Chrome, Firefox, OperaGX, Discord, Telegram, Spotify
 - Minimizable to mini chat or mini control interface for better workflow
 
+
 # Key Features
 1. **Dynamic Case Generator**: Translates natural language commands into executable actions through the `assistant()` function.
 
@@ -50,6 +51,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
    - Action delay customization
    - Windows startup option
 
+
 # Technical Innovations
 1. **Natural Language Processing**: Advanced NLP for command interpretation
 2. **Task Automation**: Smart algorithms for task breakdown
@@ -57,6 +59,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 4. **Cross-Application Support**: Seamless multi-app integration
 5. **Visual Analysis**: Screen content interpretation
 6. **Voice Integration**: Speech input and output capabilities
+
 
 # Installation
 ```bash
@@ -76,6 +79,7 @@ python ./assistant.py
    - API Keys
 3. Optional: Use environment variables for API keys
 ```
+
 
 # Usage
 1. **Main Interface**:
@@ -109,11 +113,13 @@ python ./assistant.py
    - Modify JSON test cases
    - Monitor execution flow
 
+
 # Security and Privacy
 - Local execution of automation tasks
 - Secure API key management
 - Environment variable support for sensitive data
 - Open-source codebase for transparency
+
 
 # System Requirements
 - Windows Operating System
