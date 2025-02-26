@@ -9,6 +9,7 @@ import time
 import re
 import warnings
 import subprocess
+import os
 from window_focus import activate_window_title, get_installed_apps_registry
 from mouse_detection import get_cursor_shape
 from window_elements import analyze_app
@@ -21,6 +22,8 @@ from utils import print_to_chat
 from pywinauto import Application
 from tasks import load_tasks, get_task
 warnings.simplefilter("ignore", UserWarning)
+if os.name == 'nt':  # Windows only
+    from subprocess import CREATE_NO_WINDOW
 
 enable_semantic_router_map = True
 _stop_requested = False
@@ -121,20 +124,29 @@ def is_field_input_area_active():
 def get_installed_apps_ms_store():
     """Gets a list of installed Microsoft Store apps."""
     try:
-        # Use PowerShell to get AUMIDs (Application User Model IDs) of Store apps
-        powershell_command = "Get-StartApps"
-        result = subprocess.run(["powershell", "-Command", powershell_command], capture_output=True, text=True, check=True)
-        app_aumids = result.stdout.strip().split('\n')
-
-        # Filter and format app names
-        app_names = []
-        for aumid in app_aumids:
-            if aumid and not aumid.startswith('-'):
-                # Extract app name (may need further refinement based on AUMID format)
-                app_name = aumid.split("!")[0]
-                app_names.append(app_name)
-
-        return "\n".join(app_names)
+        # Use PowerShell to get the names of Microsoft Store apps
+        powershell_command = "Get-StartApps | ForEach-Object { $_.Name }"
+        
+        # Set up startupinfo to hide the console window
+        startupinfo = None
+        if os.name == 'nt':  # Windows
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            
+        # Run the command with hidden console
+        result = subprocess.run(
+            ["powershell", "-Command", powershell_command], 
+            capture_output=True, 
+            text=True, 
+            startupinfo=startupinfo,
+            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        
+        # Get the app names, filter out empty lines, and wrap each name in single quotes
+        app_names = [f"'{line.strip()}'" for line in result.stdout.strip().split('\n') if line.strip()]
+        
+        return ", ".join(app_names)
     except Exception as e:
         print_to_chat(f"Error getting installed apps from Microsoft Store: {e}")
         return ""
@@ -244,7 +256,7 @@ def get_available_rpa_tasks():
             
     return "\n\n".join(task_list)
 
-def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts):
+def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, rpa_context, screen_info, installed_apps_registry, installed_apps_ms_store):
     """Create action context using screenshot information and UI analysis."""
     # Format previous actions to pair assistant messages with their corresponding actions
     previous_actions_formatted = []
@@ -257,11 +269,11 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
             # Check if next item is an action
             if i + 1 < len(executed_actions) and not executed_actions[i + 1].startswith("RESPONSE_MESSAGE:"):
                 action_detail = executed_actions[i + 1]
-                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Assistant: {response_message}\nAction: {action_detail}")
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Response Message: {response_message}\nAction: {action_detail}")
                 i += 2  # Skip both the message and action
             else:
                 # If there's no corresponding action, just add the message
-                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Assistant: {response_message}")
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Response Message: {response_message}")
                 i += 1
         else:
             # If it's an action without a preceding message
@@ -269,13 +281,9 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
             i += 1
     
     previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
-
-    # Get screen resolution
-    screen_width, screen_height = pyautogui.size()
-    screen_info = f"Screen Resolution: {screen_width}x{screen_height}"
     
     # Get input field and cursor information
-    cursor_shape =  f"Current cursor Shape: {get_cursor_shape()}"
+    cursor_shape =  f"Current cursor shape: {get_cursor_shape()}"
     # input_field_status = f"Input Field Status: The input field is {'Active' if is_field_input_area_active() else 'Inactive'}"
 
     # Get focused window details
@@ -283,24 +291,16 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
     if focused_details:
         window_title, _, _, process_name, window_pos, window_size = focused_details
         focused_window_info = (
-            f"Focused Window Details:\n"
+            f"Focused window details:\n"
             f"Title: {window_title}\n"
             f"Process: {process_name}\n"
             f"Position: {window_pos}\n"
             f"Size: {window_size}"
         )
         ui_analysis = analyze_app(window_title)
-        ui_elements = f"UI Element Contexts:\n{ui_analysis}" if ui_analysis else ""
+        ui_elements = f"UI element contexts:\n{ui_analysis}" if ui_analysis else ""
     else:
-        focused_window_info = "Focused Window Details: There are no details about the focused window."
-
-    # Add available RPA tasks to context
-    rpa_tasks = get_available_rpa_tasks()
-    rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are no available RPA tasks."
-
-    # Get installed applications
-    installed_apps_registry = get_installed_apps_registry()
-    installed_apps_ms_store = get_installed_apps_ms_store()
+        focused_window_info = "Focused window details: There are no details about the focused window."
 
     return (
         f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language."
@@ -308,13 +308,14 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"1. Determine if the goal has been achieved.\n"
         f"2. If the goal is not achieved: \n"
         f"a. Generate a friendly response message including telling the user what you're doing along with some details for yourself in order to precisely continue generating following actions if needed."
-        f" Also provide the ui elements state or the results of your analysis if needed. Respond in the same language the user is using in the goal.\n"
+        f" Also provide the UI elements state or the results of your analysis if needed. Respond in the same language the user is using in the goal (Only apply for the response message)."
+        f" Remember that you're the one who performed all the previous actions, not the user themself so try to respond as if you did all the previous actions using your previous response messages and previous actions as contexts.\n"
         f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
-        f"- If the task cannot be completed for some reasons, respond with STOP:<reasons>\n"
+        f"- If the task cannot be completed for some reasons, respond with STOP:<reasons>. The sign can be that the same action is performed too many times without achieving the goal.\n"
         f"b. If not paused or stopped, provide only ONE next action in order to continue achieving the goal:\n"
         f"- For any action, provide a step description explaining details related to the action\n"
         f"- For any mouse action, provide coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts.\n"
-        f"- If an action requires multiple repeats, specify the number repeats needed.\n\n"
+        f"- If an action requires multiple repeats, specify the number of repeats needed.\n\n"
         f"Respond in this format:\n"
         f"TASK_COMPLETED: <Yes/No>\n"
         f"RESPONSE_MESSAGE: <Friendly response related to what you're doing>\n"
@@ -351,17 +352,18 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"4. Before providing any text_entry action, make sure a click_element action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
         f"5. Always prioritize using a keyboard action if it can replace a corresponding mouse action.\n"
         f"6. Prioritize generating execute_rpa_task action if it can achieve the goal efficiently.\n\n"
-        f"Here is the goal the user want to achieve: {goal}\n"
-        f"{f'Previous actions performed:\n{previous_actions}\n' if previous_actions else ''}\n"
-        f"Additional Contexts:\n"
-        f"{screen_info}\n"
-        f"{focused_window_info}\n"
+        f"Here is the goal the user wants to achieve: {goal}\n\n"
+        f"{f'Previous actions performed:\n{previous_actions}\n\n' if previous_actions else ''}"
+        f"Additional contexts:\n"
+        f"{screen_info}\n\n"
+        f"{focused_window_info}\n\n"
         f"{f'{ui_elements}\n\n' if ui_elements else ''}"
-        f"{cursor_shape}\n"
-        f"All currently opened programs:\n{last_programs_list}\n"
-        f"All installed programs (Registry):\n{installed_apps_registry}\n"
-        f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n"
-        f"Additional Guides:\n{app_context}\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
+        f"{cursor_shape}\n\n"
+        f"Here are the all the programs on the user's windows:\n"
+        f"All currently opened programs:\n{last_programs_list}\n\n"
+        f"All installed programs (Registry):\n{installed_apps_registry}\n\n"
+        f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n\n"
+        f"Additional guides for specific applications:\n{app_context}\n\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
     )
 
 def parse_assistant_result(result):
@@ -425,6 +427,18 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
 
     app_context = app_space_map(map='app_space')
     keyboard_shortcuts = app_space_map()
+
+    # Add available RPA tasks to context
+    rpa_tasks = get_available_rpa_tasks()
+    rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are no available RPA tasks."
+
+    # Get screen resolution
+    screen_width, screen_height = pyautogui.size()
+    screen_info = f"Screen Resolution: {screen_width}x{screen_height}"
+
+    # Get installed applications
+    installed_apps_registry = get_installed_apps_registry()
+    installed_apps_ms_store = get_installed_apps_ms_store()
     
     # Get settings with defaults
     from assistant import load_settings
@@ -451,6 +465,10 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             executed_actions,
             app_context,
             keyboard_shortcuts,
+            rpa_context,
+            screen_info,
+            installed_apps_registry,
+            installed_apps_ms_store
         )
         
         action_key = f"{original_goal}_{attempt}"
