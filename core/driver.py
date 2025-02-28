@@ -332,9 +332,9 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"}}\n\n"
         f"Available action types and corresponding step descriptions to provide:\n"
         f"- move_to: The element or position we want to move the mouse cursor to.\n"
-        f"- click_element: The element or position to click on.\n"
+        f"- click: The element or position to click on.\n"
+        f"- double_click: The element or position to double click on.\n"
         f"- right_click: The element or position to right click on.\n"
-        f"- double_click_element: The element or position to double click on.\n"
         f"- drag: The starting position to click and drag from, and the ending position to release at (Coordinates required for both positions).\n"
         f"- press_key: The key or the combination of keys to press. (Example: \"Ctrl + T\").\n"
         f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
@@ -348,8 +348,8 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"1. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only use the previous actions as additional contexts.\n"
         f"2. If a previous action didn't perform correctly, you can try again the same action but with rephrased step description or better coordinates.\n"
         f"3. If the goal requires interacting with an application, always provide an open_app action to open or focus on that application before performing any other action on that application.\n"
-        f"4. Before providing any action other than click_element action on any application window, make sure a click_element action is performed beforehand to focus on that application window first.\n"
-        f"5. Before providing any text_entry action, make sure a click_element action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
+        f"4. Before providing any action other than click action on any application window, make sure a click action is performed beforehand to focus on that application window first.\n"
+        f"5. Before providing any text_entry action, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
         f"6. Always prioritize using a keyboard action if it can replace a corresponding mouse action.\n"
         f"7. Prioritize generating execute_rpa_task action if it can achieve the goal efficiently.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
@@ -552,7 +552,7 @@ def execute_optimized_action(action_json):
         coordinates_str = action.get('coordinates', '')
         x = y = None
         
-        if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
+        if coordinates_str and action['act'] in {"move_to", "click", "double_click", "right_click", "hold_key_and_click", "drag"}:
             try:
                 # For drag action, parse both start and end coordinates
                 if action['act'] == "drag" and " to " in coordinates_str:
@@ -646,9 +646,9 @@ def execute_optimized_action(action_json):
 
         action_map = {
             "move_to": lambda: move_mouse(x, y) if x is not None and y is not None else False,
-            "click_element": lambda: perform_mouse_action(x, y, "single", repeat) if x is not None and y is not None else False,
+            "click": lambda: perform_mouse_action(x, y, "single", repeat) if x is not None and y is not None else False,
+            "double_click": lambda: perform_mouse_action(x, y, "double", repeat) if x is not None and y is not None else False,
             "right_click": lambda: perform_mouse_action(x, y, "right", repeat) if x is not None and y is not None else False,
-            "double_click_element": lambda: perform_mouse_action(x, y, "double", repeat) if x is not None and y is not None else False,
             "drag": lambda: repeat_action(perform_drag_action) if x is not None and y is not None and 'end_pos' in action else False,
             "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['step'])),
             "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['step'].split(" and click ")[0]) if x is not None and y is not None else False,
@@ -663,7 +663,7 @@ def execute_optimized_action(action_json):
             success = action_map[action['act']]()
             # Only check coordinates for non-text_entry actions
             if success is False:
-                if coordinates_str and action['act'] in {"move_to", "click_element", "double_click_element", "right_click", "hold_key_and_click", "drag"}:
+                if coordinates_str and action['act'] in {"move_to", "click", "double_click", "right_click", "hold_key_and_click", "drag"}:
                     print_to_chat("Failed to execute action with provided coordinates")
                     return False
                 elif action['act'] == "open_app":

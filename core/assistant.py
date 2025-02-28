@@ -139,9 +139,10 @@ class ChatArea(QScrollArea):
         """)
 
 class AppContextDialog(QDialog):
-    def __init__(self, parent=None, app_name=None, context_data=None):
+    def __init__(self, parent=None, app_name=None, context_data=None, is_shortcut=False):
         super().__init__(parent)
-        self.setWindowTitle("App Context Editor")
+        self.is_shortcut = is_shortcut
+        self.setWindowTitle("Shortcuts Context Editor" if is_shortcut else "App Context Editor")
         self.setMinimumSize(600, 500)
         
         layout = QVBoxLayout(self)
@@ -153,27 +154,14 @@ class AppContextDialog(QDialog):
         self.name_entry = QLineEdit()
         if app_name:
             self.name_entry.setText(app_name)
-            self.name_entry.setEnabled(False)
         name_layout.addWidget(self.name_entry)
         layout.addWidget(name_frame)
-        
-        # Context type selector
-        type_frame = QWidget()
-        type_layout = QHBoxLayout(type_frame)
-        type_layout.addWidget(QLabel("Context Type:"))
-        self.type_ui = QRadioButton("UI Elements")
-        self.type_shortcuts = QRadioButton("Keyboard Shortcuts")
-        self.type_ui.setChecked(True)
-        type_layout.addWidget(self.type_ui)
-        type_layout.addWidget(self.type_shortcuts)
-        layout.addWidget(type_frame)
         
         # Context editor
         self.context_edit = QTextEdit()
         if context_data:
             if isinstance(context_data, list):
                 self.context_edit.setText("\n".join(context_data))
-                self.type_shortcuts.setChecked(True)
             elif isinstance(context_data, dict):
                 text = ""
                 for key, value in context_data.items():
@@ -182,7 +170,14 @@ class AppContextDialog(QDialog):
                         text += "\n".join(f"  {item}" for item in value)
                     text += "\n\n"
                 self.context_edit.setText(text)
-                self.type_ui.setChecked(True)
+        
+        # Add helper text
+        if self.is_shortcut:
+            helper_text = "Enter keyboard shortcuts, one per line:\n"
+        else:
+            helper_text = "Enter contexts in this format:\n\nContext Name:\n  Identifier 1\n  Identifier 2\n...\n"
+        layout.addWidget(QLabel(helper_text))
+        
         layout.addWidget(self.context_edit)
         
         # Buttons
@@ -195,12 +190,21 @@ class AppContextDialog(QDialog):
 
     def get_data(self):
         app_name = self.name_entry.text().strip()
-        context_type = "UI Elements" if self.type_ui.isChecked() else "Keyboard Shortcuts"
-        context_text = self.context_edit.toPlainText()
+        if not app_name:
+            QMessageBox.warning(self, "Error", "App name is required!")
+            return None, None
         
-        # Parse context
-        if context_type == "Keyboard Shortcuts":
+        context_text = self.context_edit.toPlainText()
+        if not context_text.strip():
+            QMessageBox.warning(self, "Error", "Context cannot be empty!")
+            return None, None
+        
+        # Parse context based on type
+        if self.is_shortcut:
             context_data = [line.strip() for line in context_text.split("\n") if line.strip()]
+            if not context_data:
+                QMessageBox.warning(self, "Error", "At least one shortcut is required!")
+                return None, None
         else:
             context_data = {}
             current_key = None
@@ -217,8 +221,12 @@ class AppContextDialog(QDialog):
             
             if current_key and current_items:
                 context_data[current_key] = current_items
-                
-        return app_name, context_type, context_data
+            
+            if not context_data:
+                QMessageBox.warning(self, "Error", "At least one UI element with identifiers is required!")
+                return None, None
+        
+        return app_name, context_data
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None, llm_model="", api_key_env_name="", 
@@ -331,33 +339,63 @@ class SettingsDialog(QDialog):
         # App Space tab
         app_space_widget = QWidget()
         app_space_layout = QVBoxLayout(app_space_widget)
-        
-        self.app_list = QScrollArea()
-        self.app_list.setWidgetResizable(True)
-        app_list_container = QWidget()
-        self.app_list_layout = QVBoxLayout(app_list_container)
-        self.app_list.setWidget(app_list_container)
-        
-        app_space_layout.addWidget(self.app_list)
-        
-        # Add app button container
-        button_container = QWidget()
-        button_layout = QHBoxLayout(button_container)
-        
-        add_app_btn = QPushButton("Add App")
-        edit_app_btn = QPushButton("Edit App")
-        remove_app_btn = QPushButton("Remove App")
-        
-        add_app_btn.clicked.connect(self.add_app)
-        edit_app_btn.clicked.connect(self.edit_app)
-        remove_app_btn.clicked.connect(self.remove_app)
-        
-        button_layout.addWidget(add_app_btn)
-        button_layout.addWidget(edit_app_btn)
-        button_layout.addWidget(remove_app_btn)
-        
-        app_space_layout.addWidget(button_container)
-        
+
+        # Create two sections
+        general_apps_group = QGroupBox("General App Contexts")
+        shortcuts_group = QGroupBox("Keyboard Shortcuts")
+
+        # General Apps section
+        general_layout = QVBoxLayout(general_apps_group)
+        self.general_app_list = QScrollArea()
+        self.general_app_list.setWidgetResizable(True)
+        general_list_container = QWidget()
+        self.general_app_list_layout = QVBoxLayout(general_list_container)
+        self.general_app_list.setWidget(general_list_container)
+
+        general_buttons = QHBoxLayout()
+        add_general_btn = QPushButton("Add App")
+        edit_general_btn = QPushButton("Edit")
+        remove_general_btn = QPushButton("Remove")
+        add_general_btn.clicked.connect(lambda: self.add_app("UI Elements"))
+        edit_general_btn.clicked.connect(lambda: self.edit_app("UI Elements"))
+        remove_general_btn.clicked.connect(lambda: self.remove_app("UI Elements"))
+
+        general_buttons.addWidget(add_general_btn)
+        general_buttons.addWidget(edit_general_btn)
+        general_buttons.addWidget(remove_general_btn)
+        general_buttons.addStretch()
+
+        general_layout.addWidget(self.general_app_list)
+        general_layout.addLayout(general_buttons)
+
+        # Keyboard Shortcuts section
+        shortcuts_layout = QVBoxLayout(shortcuts_group)
+        self.shortcuts_app_list = QScrollArea()
+        self.shortcuts_app_list.setWidgetResizable(True)
+        shortcuts_list_container = QWidget()
+        self.shortcuts_app_list_layout = QVBoxLayout(shortcuts_list_container)
+        self.shortcuts_app_list.setWidget(shortcuts_list_container)
+
+        shortcuts_buttons = QHBoxLayout()
+        add_shortcut_btn = QPushButton("Add Shortcuts")
+        edit_shortcut_btn = QPushButton("Edit")
+        remove_shortcut_btn = QPushButton("Remove")
+        add_shortcut_btn.clicked.connect(lambda: self.add_app("Keyboard Shortcuts"))
+        edit_shortcut_btn.clicked.connect(lambda: self.edit_app("Keyboard Shortcuts"))
+        remove_shortcut_btn.clicked.connect(lambda: self.remove_app("Keyboard Shortcuts"))
+
+        shortcuts_buttons.addWidget(add_shortcut_btn)
+        shortcuts_buttons.addWidget(edit_shortcut_btn)
+        shortcuts_buttons.addWidget(remove_shortcut_btn)
+        shortcuts_buttons.addStretch()
+
+        shortcuts_layout.addWidget(self.shortcuts_app_list)
+        shortcuts_layout.addLayout(shortcuts_buttons)
+
+        # Add both sections to main layout
+        app_space_layout.addWidget(general_apps_group)
+        app_space_layout.addWidget(shortcuts_group)
+
         tab_widget.addTab(app_space_widget, "App Space")
         
         layout.addWidget(tab_widget)
@@ -409,38 +447,47 @@ class SettingsDialog(QDialog):
         performance_layout.addWidget(startup_container)
 
     def load_app_list(self):
-        # Update the method to handle button selection
         try:
             with open("app_space_map.json", "r") as f:
                 app_space_data = json.load(f)
-                
+            
             # Clear existing items
-            for i in reversed(range(self.app_list_layout.count())): 
-                self.app_list_layout.itemAt(i).widget().setParent(None)
+            for i in reversed(range(self.general_app_list_layout.count())):
+                self.general_app_list_layout.itemAt(i).widget().setParent(None)
+            for i in reversed(range(self.shortcuts_app_list_layout.count())):
+                self.shortcuts_app_list_layout.itemAt(i).widget().setParent(None)
             
             # Add apps with selection handling
-            def create_app_button(name):
+            def create_app_button(name, section):
                 btn = QPushButton(name)
                 btn.setProperty("selected", False)
+                btn.setProperty("section", section)
                 btn.clicked.connect(lambda: self.select_app_button(btn))
-                btn.mouseDoubleClickEvent = lambda e: self.edit_app()
+                btn.mouseDoubleClickEvent = lambda e: self.edit_app(section)
                 return btn
             
+            # Add general apps
             for app_name, data in app_space_data.items():
                 if app_name != "keyboard_shortcuts":
-                    self.app_list_layout.addWidget(create_app_button(app_name))
+                    self.general_app_list_layout.addWidget(
+                        create_app_button(app_name, "UI Elements")
+                    )
             
+            # Add keyboard shortcuts
             if "keyboard_shortcuts" in app_space_data:
                 for app_name in app_space_data["keyboard_shortcuts"]:
-                    self.app_list_layout.addWidget(
-                        create_app_button(f"{app_name} (Shortcuts)")
+                    self.shortcuts_app_list_layout.addWidget(
+                        create_app_button(app_name, "Keyboard Shortcuts")
                     )
         except:
             pass
 
     def select_app_button(self, clicked_button):
-        # Deselect all buttons
-        for btn in self.app_list.widget().findChildren(QPushButton):
+        # Deselect all buttons in both sections
+        for btn in self.general_app_list.widget().findChildren(QPushButton):
+            btn.setProperty("selected", False)
+            btn.setStyleSheet("")
+        for btn in self.shortcuts_app_list.widget().findChildren(QPushButton):
             btn.setProperty("selected", False)
             btn.setStyleSheet("")
             
@@ -453,11 +500,12 @@ class SettingsDialog(QDialog):
             }
         """)
 
-    def add_app(self):
-        dialog = AppContextDialog(self)
+    def add_app(self, section_type):
+        dialog = AppContextDialog(self, is_shortcut=(section_type == "Keyboard Shortcuts"))
+        
         if dialog.exec() == QDialog.Accepted:
-            app_name, context_type, context_data = dialog.get_data()
-            if not app_name:
+            app_name, context_data = dialog.get_data()
+            if app_name is None or context_data is None:
                 return
                 
             try:
@@ -466,7 +514,7 @@ class SettingsDialog(QDialog):
             except:
                 app_space_data = {"keyboard_shortcuts": {}}
             
-            if context_type == "Keyboard Shortcuts":
+            if section_type == "Keyboard Shortcuts":
                 if "keyboard_shortcuts" not in app_space_data:
                     app_space_data["keyboard_shortcuts"] = {}
                 app_space_data["keyboard_shortcuts"][app_name] = context_data
@@ -478,48 +526,87 @@ class SettingsDialog(QDialog):
                 
             self.load_app_list()
 
-    def edit_app(self):
-        selected = next((btn for btn in self.app_list.widget().findChildren(QPushButton) 
-                        if btn.property("selected")), None)
+    def edit_app(self, section_type=None):
+        if section_type is None:
+            selected = next((btn for btn in self.general_app_list.widget().findChildren(QPushButton) 
+                            if btn.property("selected")), None)
+            if not selected:
+                selected = next((btn for btn in self.shortcuts_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+        else:
+            if section_type == "UI Elements":
+                selected = next((btn for btn in self.general_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+            else:
+                selected = next((btn for btn in self.shortcuts_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+        
         if not selected:
             return
-            
-        app_name = selected.text()
-        is_shortcut = "(Shortcuts)" in app_name
-        if is_shortcut:
-            app_name = app_name.replace(" (Shortcuts)", "")
-            
+        
+        old_app_name = selected.text()
+        section_type = selected.property("section")
+        is_shortcut = section_type == "Keyboard Shortcuts"
+        
         try:
             with open("app_space_map.json", "r") as f:
                 app_space_data = json.load(f)
-                
+            
             if is_shortcut:
-                context_data = app_space_data["keyboard_shortcuts"].get(app_name, [])
+                context_data = app_space_data["keyboard_shortcuts"].get(old_app_name, [])
             else:
-                context_data = app_space_data.get(app_name, {})
-                
-            dialog = AppContextDialog(self, app_name, context_data)
+                context_data = app_space_data.get(old_app_name, {})
+            
+            dialog = AppContextDialog(self, old_app_name, context_data, is_shortcut)
+            
             if dialog.exec() == QDialog.Accepted:
-                _, context_type, new_context_data = dialog.get_data()
+                new_app_name, new_context_data = dialog.get_data()
                 
-                if context_type == "Keyboard Shortcuts":
-                    app_space_data["keyboard_shortcuts"][app_name] = new_context_data
+                # Remove old entry
+                if is_shortcut:
+                    if old_app_name in app_space_data["keyboard_shortcuts"]:
+                        del app_space_data["keyboard_shortcuts"][old_app_name]
                 else:
-                    app_space_data[app_name] = new_context_data
-                    
+                    if old_app_name in app_space_data:
+                        del app_space_data[old_app_name]
+                
+                # Add new entry
+                if section_type == "Keyboard Shortcuts":
+                    if "keyboard_shortcuts" not in app_space_data:
+                        app_space_data["keyboard_shortcuts"] = {}
+                    app_space_data["keyboard_shortcuts"][new_app_name] = new_context_data
+                else:
+                    app_space_data[new_app_name] = new_context_data
+                
                 with open("app_space_map.json", "w") as f:
                     json.dump(app_space_data, f, indent=2)
-                    
+                
                 self.load_app_list()
-        except:
-            pass
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Error editing app: {str(e)}"
+            )
 
-    def remove_app(self):
-        selected = next((btn for btn in self.app_list.widget().findChildren(QPushButton) 
-                        if btn.property("selected")), None)
+    def remove_app(self, section_type=None):
+        if section_type is None:
+            selected = next((btn for btn in self.general_app_list.widget().findChildren(QPushButton) 
+                            if btn.property("selected")), None)
+            if not selected:
+                selected = next((btn for btn in self.shortcuts_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+        else:
+            if section_type == "UI Elements":
+                selected = next((btn for btn in self.general_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+            else:
+                selected = next((btn for btn in self.shortcuts_app_list.widget().findChildren(QPushButton) 
+                               if btn.property("selected")), None)
+        
         if not selected:
             return
-            
+        
         # Show confirmation dialog
         confirm = QMessageBox.question(
             self,
@@ -531,10 +618,9 @@ class SettingsDialog(QDialog):
         
         if confirm == QMessageBox.Yes:
             app_name = selected.text()
-            is_shortcut = "(Shortcuts)" in app_name
-            if is_shortcut:
-                app_name = app_name.replace(" (Shortcuts)", "")
-                
+            section_type = selected.property("section")
+            is_shortcut = section_type == "Keyboard Shortcuts"
+            
             try:
                 with open("app_space_map.json", "r") as f:
                     app_space_data = json.load(f)
@@ -548,8 +634,12 @@ class SettingsDialog(QDialog):
                     json.dump(app_space_data, f, indent=2)
                     
                 self.load_app_list()
-            except:
-                pass
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Error removing app: {str(e)}"
+                )
 
     def accept(self):
         # Get current startup state
@@ -1602,7 +1692,6 @@ class TaskEditor(QDialog):
         
         # Actions list
         self.actions_list = QListWidget()
-        # Add double click handler
         self.actions_list.itemDoubleClicked.connect(self.edit_selected_action)
         layout.addWidget(self.actions_list)
         
@@ -1905,6 +1994,10 @@ class RPATab(QWidget):
         
         layout = QVBoxLayout(self)
         
+        # Create Tasks group
+        tasks_group = QGroupBox("Tasks")
+        tasks_layout = QVBoxLayout(tasks_group)
+        
         # Task list with improved visibility
         self.task_list = QListWidget()
         # Add double click handler for tasks
@@ -1931,7 +2024,7 @@ class RPATab(QWidget):
                 border-radius: 4px;
             }
         """)
-        layout.addWidget(self.task_list)
+        tasks_layout.addWidget(self.task_list)
         
         # Task buttons
         task_buttons = QHBoxLayout()
@@ -1941,7 +2034,10 @@ class RPATab(QWidget):
         task_buttons.addWidget(self.add_task)
         task_buttons.addWidget(self.edit_task)
         task_buttons.addWidget(self.delete_task)
-        layout.addLayout(task_buttons)
+        tasks_layout.addLayout(task_buttons)
+        
+        # Add tasks group to main layout
+        layout.addWidget(tasks_group)
         
         # Task execution settings
         settings_frame = QFrame()
