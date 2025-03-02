@@ -35,14 +35,14 @@ class TransparentSubtitlesWindow:
         wraplength = screen_width - self.padding * 2
 
         self.label = tk.Label(self.root, text=self.text, font=('Helvetica', 20), 
-                            fg='light sky blue', bg='steel blue', 
+                            fg='light sky blue', bg='DodgerBlue4', 
                             wraplength=wraplength, justify='center')
         self.label.pack()
 
         # Set the window to be always on top, transparent, and without decorations
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
-        self.root.attributes('-transparentcolor', 'steel blue')
+        self.root.attributes('-transparentcolor', 'DodgerBlue4')
         
         # Prevent focus stealing
         self.root.withdraw()  # Hide window initially
