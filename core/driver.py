@@ -282,8 +282,9 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
     
     previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
     
-    # Get input field and cursor information
-    cursor_shape =  f"Current cursor shape: {get_cursor_shape()}"
+    # Get cursor information
+    cursor_x, cursor_y = pyautogui.position()
+    cursor_info = f"Current Cursor Position: x={cursor_x}, y={cursor_y}\nCurrent Cursor Shape: {get_cursor_shape()}"
     # input_field_status = f"Input Field Status: The input field is {'Active' if is_field_input_area_active() else 'Inactive'}"
 
     # Get focused window details
@@ -345,20 +346,21 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- execute_rpa_task: The task name to execute. (Provide only the task name. Use this action to execute a saved RPA task).\n"
         f"{rpa_context}\n\n"
         f"Important Rules (Please Always Follows These Rules):\n"
-        f"1. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only use the previous actions as additional contexts.\n"
-        f"2. If a previous action didn't perform correctly, you can try again the same action but with rephrased step description or better coordinates.\n"
-        f"3. If the goal requires interacting with an application, always provide an open_app action to open or focus on that application before performing any other action on that application.\n"
-        f"4. Before providing any action other than click action on any application window, make sure a click action is performed beforehand to focus on that application window first.\n"
-        f"5. Before providing any text_entry action, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
-        f"6. Always prioritize using a keyboard action if it can replace a corresponding mouse action.\n"
-        f"7. Prioritize generating execute_rpa_task action if it can achieve the goal efficiently.\n\n"
+        f"1. In the step description, always provide ONLY the exact information specified above without any descriptive text.\n"
+        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only use the previous actions as additional contexts.\n"
+        f"3. If the last action didn't perform correctly, you can try again using another better alternative action that you think to be more effective.\n"
+        f"4. If the last action is a mouse action and it didn't perform correctly, you can also try again with the same mouse action but modify the previous coordinates for a better accuracy.\n"
+        f"5. If the goal requires interacting with an application, always provide an open_app action to open and focus on that application before performing any other actions on that application.\n"
+        f"6. Before providing any text_entry action on an input area, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
+        f"7. Always prioritize using a press_key action if it can replace a corresponding mouse action.\n"
+        f"8. Prioritize generating execute_rpa_task action to achieve the goal more efficiently if available.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
         f"Previous actions performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
         f"Additional contexts:\n"
         f"{screen_info}\n\n"
         f"{focused_window_info}\n\n"
         f"{f'{ui_elements}\n\n' if ui_elements else ''}"
-        f"{cursor_shape}\n\n"
+        f"{cursor_info}\n\n"
         f"Here are the all the programs on the user's windows:\n"
         f"All currently opened programs:\n{last_programs_list}\n\n"
         f"All installed programs (Registry):\n{installed_apps_registry}\n\n"
@@ -372,8 +374,25 @@ def parse_assistant_result(result):
     task_completed = False
     next_action = None
     response_message = None
-        
+    
     try:
+        # First, check if the last action was a desktop-focusing command
+        is_desktop_focus = False
+        try:
+            remaining_text = result[result.index('NEXT_ACTION:') + len('NEXT_ACTION:'):].strip()
+            start_idx = remaining_text.find('{')
+            end_idx = remaining_text.rfind('}') + 1
+            if start_idx != -1 and end_idx != -1:
+                action_json = remaining_text[start_idx:end_idx]
+                action_data = json.loads(action_json)
+                action = action_data['actions'][0]
+                if (action['act'] == 'press_key' and 
+                    ('windows + d' in action['step'].lower() or 
+                     'win + d' in action['step'].lower())):
+                    is_desktop_focus = True
+        except:
+            pass
+            
         for line in lines:
             if line.startswith('TASK_COMPLETED:'):
                 task_completed = 'yes' in line.lower()
@@ -397,7 +416,9 @@ def parse_assistant_result(result):
                 
         if response_message:
             print_to_chat(response_message)
-            speaker(response_message.replace('PAUSE:', '').replace('STOP:', '').strip())
+            # Pass the is_desktop_focus flag to the speaker function
+            speaker(response_message.replace('PAUSE:', '').replace('STOP:', '').strip(), 
+                   skip_focus=is_desktop_focus)
             
     except Exception as e:
         print_to_chat(f"Error parsing assistant result: {e}")
@@ -587,14 +608,14 @@ def execute_optimized_action(action_json):
             message_writer_agent = [{
                 "role": "user",
                 "content":  f"You're an AI Agent called Writer that processes the goal and only returns the final text goal.\n"
-                           f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines.\n"
-                           f"If the goal is a link, media or a search string, just return the result string."
+                            f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines.\n"
+                            f"If the goal is a link, media or a search string, just return the result string."
             }, {
                 "role": "system",
                 "content": f"Goal: {action['step']}"
             }]
             
-            text_to_write = api_call(message_writer_agent, max_tokens=200)
+            text_to_write = api_call(message_writer_agent, max_tokens=1000)
             
             def write_once():
                 try:
@@ -859,7 +880,7 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
         "content": f"Goal: {goal}"
     }]
     
-    message_to_write = api_call(message_writer_agent, max_tokens=200)
+    message_to_write = api_call(message_writer_agent, max_tokens=1000)
     
     # Handle click actions if needed
     if any(click_term in goal.lower() for click_term in ["click on", "click the", "click"]):

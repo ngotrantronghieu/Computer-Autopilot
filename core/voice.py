@@ -4,7 +4,10 @@ import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 import tkinter as tk
+import time
+import win32gui
 from gtts import gTTS
+from window_focus import activate_window_title
 
 # Initialize Pygame's mixer
 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
@@ -12,7 +15,17 @@ volume = 0.25
 subtitles = True
 
 class TransparentSubtitlesWindow:
+    _current_instance = None  # Class variable to track current instance
+    
     def __init__(self, text):
+        # Close any existing subtitle window
+        if TransparentSubtitlesWindow._current_instance is not None:
+            try:
+                TransparentSubtitlesWindow._current_instance.close()
+            except:
+                pass
+        
+        TransparentSubtitlesWindow._current_instance = self
         self.root = tk.Tk()
         self.text = text
 
@@ -21,34 +34,53 @@ class TransparentSubtitlesWindow:
         self.padding = 10
         wraplength = screen_width - self.padding * 2
 
-        self.label = tk.Label(self.root, text=self.text, font=('Helvetica', 20), fg='DodgerBlue2', bg='DodgerBlue4', wraplength=wraplength, justify='center')
+        self.label = tk.Label(self.root, text=self.text, font=('Helvetica', 20), 
+                            fg='light sky blue', bg='steel blue', 
+                            wraplength=wraplength, justify='center')
         self.label.pack()
 
         # Set the window to be always on top, transparent, and without decorations
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
-        self.root.attributes('-transparentcolor', 'DodgerBlue4')
-
-        # Set window position (Corrected calculation)
-        label_width = self.label.winfo_reqwidth()  # Get the actual width of the label
+        self.root.attributes('-transparentcolor', 'steel blue')
+        
+        # Prevent focus stealing
+        self.root.withdraw()  # Hide window initially
+        # self.root.attributes('-alpha', 0.8)  # Make slightly transparent
+        
+        # Set window position
+        label_width = self.label.winfo_reqwidth()
         x_position = (screen_width - label_width) // 2
         self.root.geometry('+%d+%d' % (x_position, self.root.winfo_screenheight() - 150))
+        
+        # Show window without stealing focus
+        self.root.deiconify()
         self.update()
 
     def update(self):
         self.label.configure(text=self.text)
         self.root.update_idletasks()
-        self.root.update()
+        try:
+            self.root.update()
+        except:
+            pass
 
     def change_text(self, new_text, duration):
         self.text = new_text
         self.update()
 
         # Schedule removing the text after the duration
-        self.root.after(duration, lambda: self.label.configure(text=""))
+        self.root.after(duration, self.close)
 
     def close(self):
-        self.root.quit()
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except:
+            pass
+        finally:
+            if TransparentSubtitlesWindow._current_instance == self:
+                TransparentSubtitlesWindow._current_instance = None
 
 def calculate_duration_of_speech(text, lang='en', wpm=150):
     """Estimate the duration the subtitles should be displayed based on words per minute (WPM)"""
@@ -81,7 +113,14 @@ def set_subtitles(subtitles_bool):
     global subtitles
     subtitles = subtitles_bool
 
-def speaker(text, additional_text=None, lang='en'):
+def speaker(text, additional_text=None, lang='en', skip_focus=False):
+    # Store current focused window only if we're not skipping focus
+    if os.name == 'nt' and not skip_focus:
+        current_window = win32gui.GetForegroundWindow()
+        current_title = win32gui.GetWindowText(current_window)
+    else:
+        current_title = None
+
     # Initialize all of pygame's modules
     pygame.init()
 
@@ -92,11 +131,12 @@ def speaker(text, additional_text=None, lang='en'):
 
     # Temporary mp3 file creation
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
-        tts = gTTS(text=text, lang=lang)
+        tts = gTTS(text=text, lang=lang, slow=False)
         tts.save(fp.name)
         temp_file_path = fp.name
 
     # Start the subtitles thread
+    subtitles_thread = None
     if subtitles is True:
         def setup_subtitles():
             window = TransparentSubtitlesWindow(text)
@@ -104,15 +144,28 @@ def speaker(text, additional_text=None, lang='en'):
             window.root.mainloop()
 
         subtitles_thread = threading.Thread(target=setup_subtitles)
-        subtitles_thread.daemon = True  # Now the thread will close when the main program exits
+        subtitles_thread.daemon = True
         subtitles_thread.start()
-    else:
-        subtitles_thread = None
 
     # Start the audio thread
-    audio_thread = threading.Thread(target=play_audio(temp_file_path))
+    audio_thread = threading.Thread(target=play_audio, args=(temp_file_path,))
     audio_thread.daemon = True
     audio_thread.start()
+
+    # Restore focus to previous window after a short delay
+    if os.name == 'nt' and current_title and not skip_focus:
+        def restore_focus():
+            time.sleep(0.5)  # Small delay to let the audio start
+            try:
+                new_window = win32gui.GetForegroundWindow()
+                if new_window != current_window:
+                    activate_window_title(current_title)
+            except:
+                pass
+
+        focus_thread = threading.Thread(target=restore_focus)
+        focus_thread.daemon = True
+        focus_thread.start()
 
     # Return the threads in case the caller wants to track them
     return audio_thread, subtitles_thread

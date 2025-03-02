@@ -797,8 +797,8 @@ class MiniChatInterface(QWidget):
                 color: white;
                 border: none;
                 border-radius: 3px;
-                padding: 0;
-                margin: 0;
+                padding: 0px;
+                margin: 0px;
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -827,8 +827,8 @@ class MiniChatInterface(QWidget):
                 color: white;
                 border: none;
                 border-radius: 3px;
-                padding: 0;
-                margin: 0;
+                padding: 0px;
+                margin: 0px;
                 font-size: 14px;
             }}
             QPushButton:hover {{
@@ -2805,8 +2805,8 @@ class ModernChatInterface(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 5px;
-                padding: 0;
-                margin: 0;
+                padding: 0px;
+                margin: 0px;
                 font-size: 16px;
             }
             QPushButton:hover {
@@ -3131,12 +3131,12 @@ class ModernChatInterface(QMainWindow):
                 message_lower = message.lower()
 
                 # Handle simple tasks first
-                if "open" in message_lower and len(message_lower) < 20:
+                if message_lower.startswith("open ") and len(message_lower) < 20:
                     window_title = message_lower.split("open ")[-1].strip()
                     activate_window_title(window_title)
                     self.complete_task(f"Activated Window: {window_title}")
-                elif "scroll" in message_lower:
-                    scroll_amount = 800
+                elif message_lower.startswith("scroll ") and len(message_lower) < 20:
+                    scroll_amount = 850
                     if "up" in message_lower:
                         pyautogui.scroll(scroll_amount)
                         self.complete_task("Scrolled up")
@@ -3149,18 +3149,18 @@ class ModernChatInterface(QMainWindow):
                     else:
                         pyautogui.scroll(-scroll_amount)
                         self.complete_task("Scrolled down")
-                elif "press" in message_lower:
+                elif message_lower.startswith("press ") and len(message_lower) < 20:
                     key = message_lower.split("press ")[-1].strip()
                     perform_simulated_keypress(key)
                     self.complete_task(f"Pressed {key}")
-                elif "type" in message_lower:
+                elif message_lower.startswith("type "):
                     text = message_lower.split("type ")[-1].strip()
                     write_action(goal=text)
                     self.complete_task(f"Typed: {text}")
-                elif "click" in message_lower and len(message_lower) < 30:
+                elif message_lower.startswith("click ") and len(message_lower) < 30:
                     response = fast_act(message_lower, action_type="single")
                     self.complete_task(response)
-                elif "double click" in message_lower and len(message_lower) < 37:
+                elif message_lower.startswith("double click ") and len(message_lower) < 37:
                     response = fast_act(message_lower.split("double ")[-1].strip(), action_type="double")
                     self.complete_task(response)
                 else:
@@ -3182,10 +3182,10 @@ class ModernChatInterface(QMainWindow):
                             )
                             self.complete_task(joyful_response)
                 
-                if not self.isActiveWindow():
-                    self.show()
-                    self.raise_()
-                    self.activateWindow()
+                # if not self.isActiveWindow():
+                #     self.show()
+                #     self.raise_()
+                #     self.activateWindow()
                 
             except Exception as e:
                 error_message = f"Error: {str(e)}"
@@ -3212,8 +3212,8 @@ class ModernChatInterface(QMainWindow):
                     color: white;
                     border: none;
                     border-radius: 5px;
-                    padding: 0;
-                    margin: 0;
+                    padding: 0px;
+                    margin: 0px;
                     font-size: 16px;
                 }
                 QPushButton:hover {
@@ -3230,8 +3230,8 @@ class ModernChatInterface(QMainWindow):
                     color: white;
                     border: none;
                     border-radius: 5px;
-                    padding: 0;
-                    margin: 0;
+                    padding: 0px;
+                    margin: 0px;
                     font-size: 16px;
                 }
                 QPushButton:hover {
