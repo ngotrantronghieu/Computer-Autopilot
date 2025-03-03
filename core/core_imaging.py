@@ -69,7 +69,7 @@ def analyze_image(base64_image, window_title, additional_context='What’s in th
 
 
 # Improved function to both capture and analyze a specific region screenshot
-def imaging(window_title=None, additional_context=None, x=None, y=None, screenshot_size=None):
+def imaging(window_title=None, additional_context=None, x=None, y=None, screenshot_size=None, current_cursor_shape=None):
     window = None
     region = None
 
@@ -89,8 +89,8 @@ def imaging(window_title=None, additional_context=None, x=None, y=None, screensh
 
     screenshot = capture_screenshot(window, region)
 
-    # Get current cursor shape
-    current_cursor = get_cursor_shape()
+    if current_cursor_shape is None:
+        current_cursor_shape = get_cursor_shape()
     
     # Map cursor shapes to corresponding cursor image files and their hotspots
     cursor_images = {
@@ -121,7 +121,7 @@ def imaging(window_title=None, additional_context=None, x=None, y=None, screensh
     }
     
     # Select appropriate cursor image and hotspot
-    cursor_info = cursor_images.get(current_cursor, cursor_images["Other"])
+    cursor_info = cursor_images.get(current_cursor_shape, cursor_images["Other"])
     cursor_img_path = cursor_info["path"]
     hotspot_x, hotspot_y = cursor_info["hotspot"]
     

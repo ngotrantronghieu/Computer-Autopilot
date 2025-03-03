@@ -256,7 +256,7 @@ def get_available_rpa_tasks():
             
     return "\n\n".join(task_list)
 
-def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, rpa_context, screen_info, installed_apps_registry, installed_apps_ms_store):
+def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, rpa_context, screen_info, current_cursor_shape, installed_apps_registry, installed_apps_ms_store):
     """Create action context using screenshot information and UI analysis."""
     # Format previous actions to pair assistant messages with their corresponding actions
     previous_actions_formatted = []
@@ -284,7 +284,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
     
     # Get cursor information
     cursor_x, cursor_y = pyautogui.position()
-    cursor_info = f"Current Cursor Position: x={cursor_x}, y={cursor_y}\nCurrent Cursor Shape: {get_cursor_shape()}"
+    cursor_info = f"Current Cursor Position: x={cursor_x}, y={cursor_y}\nCurrent Cursor Shape: {current_cursor_shape}"
     # input_field_status = f"Input Field Status: The input field is {'Active' if is_field_input_area_active() else 'Inactive'}"
 
     # Get focused window details
@@ -481,6 +481,8 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
                 return "Task paused: Waiting for resume"
             return "Task incomplete: Execution stopped by user"
             
+        current_cursor_shape = get_cursor_shape()
+        
         action_context = create_action_context(
             original_goal,
             executed_actions,
@@ -488,6 +490,7 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             keyboard_shortcuts,
             rpa_context,
             screen_info,
+            current_cursor_shape,
             installed_apps_registry,
             installed_apps_ms_store
         )
@@ -496,7 +499,8 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
         if action_key not in action_cache:
             result = imaging(
                 additional_context=action_context,
-                screenshot_size='Full screen'
+                screenshot_size='Full screen',
+                current_cursor_shape=current_cursor_shape
             )['choices'][0]['message']['content']
             action_cache[action_key] = result
         else:
