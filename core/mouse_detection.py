@@ -25,13 +25,13 @@ def get_cursor_shape():
     if cursor_info.hCursor == cursor_arrow:
         return "Arrow"
     elif cursor_info.hCursor == cursor_ibeam:
-        return "The cursor is active for Text Input (I-beam)"
+        return "I-beam (Active for text input)"
     elif cursor_info.hCursor == cursor_hand:
-        return "The cursor is 'Hand' (A link is select)"
+        return "Hand"
     elif cursor_info.hCursor == cursor_wait:
-        return "The cursor is 'Wait' (Busy) - Hourglass or Watch"
+        return "Wait/Busy (Hourglass)"
     elif cursor_info.hCursor == cursor_cross:
-        return "The cursor is 'Cross'"
+        return "Cross"
     else:
         return "Other"
 
