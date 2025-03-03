@@ -3178,7 +3178,8 @@ class ModernChatInterface(QMainWindow):
                         else:
                             joyful_response = api_call(
                                 [{"role": "user", "content": message}],
-                                temperature=0.7
+                                temperature=0.7,
+                                max_tokens=1000
                             )
                             self.complete_task(joyful_response)
                 
