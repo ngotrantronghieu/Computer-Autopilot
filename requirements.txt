@@ -1,8 +1,6 @@
-setuptools
 pywinauto
 pyautogui
 pygetwindow
-customtkinter
 litellm
 Pillow
 speechRecognition
@@ -10,7 +8,6 @@ pywin32
 psutil
 ImageGrab
 fuzzywuzzy
-pytesseract
 uiautomation
 gtts
 pygame
@@ -20,5 +17,5 @@ PySide6
 pynput
 schedule
 langdetect
-pyinstaller
 deep_translator
+json5
