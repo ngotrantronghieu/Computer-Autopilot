@@ -124,8 +124,11 @@ def is_field_input_area_active():
 def get_installed_apps_ms_store():
     """Gets a list of installed Microsoft Store apps."""
     try:
-        # Use PowerShell to get the names of Microsoft Store apps
-        powershell_command = "Get-StartApps | ForEach-Object { $_.Name }"
+        # Modified PowerShell command to ensure proper Unicode output
+        powershell_command = """
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        Get-StartApps | ForEach-Object { $_.Name }
+        """
         
         # Set up startupinfo to hide the console window
         startupinfo = None
@@ -134,11 +137,12 @@ def get_installed_apps_ms_store():
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0  # SW_HIDE
             
-        # Run the command with hidden console
+        # Run the command with hidden console and UTF-8 encoding
         result = subprocess.run(
-            ["powershell", "-Command", powershell_command], 
-            capture_output=True, 
-            text=True, 
+            ["powershell", "-NoProfile", "-Command", powershell_command], 
+            capture_output=True,
+            encoding='utf-8',
+            errors='replace',
             startupinfo=startupinfo,
             creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
@@ -304,12 +308,12 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         focused_window_info = "Focused Window Details: There are no details about the focused window."
 
     return (
-        f"You are an AI Agent called Windows AI that is capable to operate freely all applications on Windows by only using natural language."
-        f"You will be given a goal that the user want to achieve, a screenshot of the user current windows screen along with the previous actions you've performed. Based on these:\n"
+        f"You are an AI Agent called Windows AI that is capable of operating freely on Windows one step at a time to accomplish the user's goal."
+        f"You will be given a goal that the user wants to achieve, a screenshot of the user's current Windows screen along with the previous actions you've performed. Based on these:\n"
         f"1. Determine if the goal has been achieved.\n"
-        f"2. If the goal is not achieved: \n"
+        f"2. If the goal is not achieved:\n"
         f"a. Generate a friendly response message telling the user what you're doing. Also provide the UI elements state or the results of your analysis if needed. Respond in the same language the user is using in the goal (Only apply for the response message)."
-        f" Remember that you're the one who performed all the previous actions, not the user themself so try to respond as if you did all the previous actions using your previous response messages and previous actions as contexts.\n"
+        f" Remember that you're the one who performed all the previous actions, not the user themselves so try to respond as if you did all the previous actions using your previous response messages and previous actions as contexts.\n"
         f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
         f"- If the task cannot be completed for some reasons or if you don't know what to do next, respond with STOP:<reasons>. The sign can also be that you see the same action is performed too many times without achieving the goal.\n"
         f"b. If you choose to continue and not to pause or stop, provide only ONE next action in JSON format to continue achieving the goal:\n"
@@ -346,13 +350,13 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- execute_rpa_task: The task name to execute. (Use this action to execute a saved RPA task).\n"
         f"{rpa_context}\n\n"
         f"Important Rules:\n"
-        f"1. In the step description, provide ONLY the exact information specified above without any additional text.\n"
-        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only use the previous actions as additional contexts.\n"
-        f"3. If the last action didn't perform correctly, you can try again using another better alternative action that you think to be more effective.\n"
-        f"4. If the last action is a mouse action and it didn't perform correctly, you can also try again with the same mouse action but modify the previous coordinates for a better accuracy.\n"
+        f"1. In the step description, provide ONLY the exact information for each action type specified above without any additional text.\n"
+        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts.\n"
+        f"3. If you see that the last action didn't perform correctly based on the current status being shown on the screen, you can try again using a better alternative action that you think to be more effective.\n"
+        f"4. If the last action is a mouse action and you see that it didn't perform correctly, you can also try again with the same mouse action but try better coordinates for more accuracy.\n"
         f"5. If the goal requires interacting with an application, always provide an open_app action to open and focus on that application before performing any other actions on that application.\n"
         f"6. Before providing any text_entry action on an input area, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
-        f"7. Always prioritize using a press_key action if it can replace a corresponding mouse action.\n"
+        f"7. Always prioritize using a press_key action if it can replace a mouse action that results in the same outcome.\n"
         f"8. Prioritize generating execute_rpa_task action to achieve the goal more efficiently if available.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
         f"Previous actions performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
@@ -361,7 +365,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"{focused_window_info}\n\n"
         f"{f'{ui_elements}\n\n' if ui_elements else ''}"
         f"{cursor_info}\n\n"
-        f"Here are the all the programs on the user's windows:\n"
+        f"Here are the all the programs on the user's Windows:\n"
         f"All currently opened programs:\n{last_programs_list}\n\n"
         f"All installed programs (Registry):\n{installed_apps_registry}\n\n"
         f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n\n"
@@ -985,3 +989,4 @@ create_database(database_file)
 # Example Usage
 if __name__ == "__main__":
     assistant(assistant_goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge")
+
