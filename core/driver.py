@@ -230,8 +230,8 @@ def get_available_rpa_tasks():
             action_details = []
             for i, action in enumerate(actions, 1):
                 act_type = action.get('act', '')
-                step = action.get('step', '')
-                action_details.append(f"  {i}. {act_type}: {step}")
+                act_detail = action.get('detail', '')
+                action_details.append(f"  {i}. {act_type}: {act_detail}")
             
             # Build task info string
             task_info = [
@@ -247,8 +247,8 @@ def get_available_rpa_tasks():
             action_details = []
             for i, action in enumerate(actions, 1):
                 act_type = action.get('act', '')
-                step = action.get('step', '')
-                action_details.append(f"  {i}. {act_type}: {step}")
+                act_detail = action.get('detail', '')
+                action_details.append(f"  {i}. {act_type}: {act_detail}")
                 
             task_info = [
                 f"Task: {name}",
@@ -308,34 +308,34 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         focused_window_info = "Focused Window Details: There are no details about the focused window."
 
     return (
-        f"You are an AI Agent called Windows AI that is capable of operating freely on Windows one step at a time to accomplish the user's goal."
+        f"You are an AI Agent called Computer Autopilot that is capable of operating freely on Windows one action at a time to accomplish the user's goal."
         f"You will be given a goal that the user wants to achieve, a screenshot of the user's current Windows screen along with the previous actions you've performed. Based on these:\n"
-        f"1. Determine if the goal has been achieved.\n"
+        f"1. Determine if the goal has been achieved based on the current status being shown on the screen.\n"
         f"2. If the goal is not achieved:\n"
-        f"a. Generate a friendly response message telling the user what you're doing. Also provide the UI elements state or the results of your analysis if needed. Respond in the same language the user is using in the goal (Only apply for the response message)."
+        f"a. Generate a friendly response message telling the user what you're going to do. Also provide the UI elements state or the results of your analysis if needed. In the response message, respond in the same language the user is using in the goal."
         f" Remember that you're the one who performed all the previous actions, not the user themselves so try to respond as if you did all the previous actions using your previous response messages and previous actions as contexts.\n"
         f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
-        f"- If the task cannot be completed for some reasons or if you don't know what to do next, respond with STOP:<reasons>. The sign can also be that you see the same action is performed too many times without achieving the goal.\n"
-        f"b. If you choose to continue and not to pause or stop, provide only ONE next action in JSON format to continue achieving the goal:\n"
-        f"- For any action, provide a step description explaining the exact details related to the action.\n"
-        f"- For any mouse action, provide coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts. For other actions, don't include the coordinates in the JSON.\n"
+        f"- If the task cannot be completed for some reasons or if you don't know what to do next, respond with STOP:<reasons>. The sign to indicate that a task cannot be completed is you see the same action is performed too many times without achieving the goal.\n"
+        f"b. If you choose to continue and not to pause or stop, provide only ONE next action in the following JSON format below to continue achieving the goal:\n"
+        f"- For any action, provide an action description explaining the exact details related to that action mentioned below.\n"
+        f"- For any mouse action, provide the coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts. For other actions, don't include the coordinates in the JSON.\n"
         f"- Specify the number of repeats needed.\n\n"
-        f"Respond in this format:\n"
+        f"Respond in the following format:\n"
         f"TASK_COMPLETED: <Yes/No>\n"
         f"RESPONSE_MESSAGE: <A friendly response message related to what you're doing>\n"
         f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action>\n\n"
         f"JSON format for next action:\n"
         f"{{\n"
-        f"    \"actions\": [\n"
+        f"    \"action\": [\n"
         f"        {{\n"
         f"            \"act\": \"<action_type>\",\n"
-        f"            \"step\": \"<step_description>\",\n"
+        f"            \"detail\": \"<action_description>\",\n"
         f"            \"coordinates\": \"x=<x_value>, y=<y_value>\" (\"x=<x_value>, y=<y_value> to x=<x_value>, y=<y_value>\" for drag action),\n"
         f"            \"repeat\": <number_of_repeats>\n"
         f"        }}\n"
         f"    ]\n"
         f"}}\n\n"
-        f"Available action types and corresponding step descriptions to provide:\n"
+        f"Available action types and corresponding action descriptions to provide:\n"
         f"- move_to: The element or position we want to move the mouse cursor to.\n"
         f"- click: The element or position to click on.\n"
         f"- double_click: The element or position to double click on.\n"
@@ -343,15 +343,16 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- drag: The starting position to click and drag from, and the ending position to release at (Coordinates required for both positions).\n"
         f"- press_key: The key or the combination of keys to press. (Example: \"Ctrl + T\").\n"
         f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
-        f"- text_entry: The specific text input to type or write. It can be a word, a sentence, a paragraph or an entire essay. (Example: \"Hello World\" or \"An essay about environment\").\n"
+        f"- text_entry: The specific text to type or write. It can be a word, a sentence, a paragraph or an entire essay. Use \'\\n\' to indicate a new line. (Example: \"Hello World\").\n"
         f"- scroll: The direction to scroll. (Each scroll action will scroll the screen for 850 pixels).\n"
         f"- open_app: The application name to open or focus on.\n"
         f"- time_sleep: The duration to wait for.\n"
         f"- execute_rpa_task: The task name to execute. (Use this action to execute a saved RPA task).\n"
         f"{rpa_context}\n\n"
         f"Important Rules:\n"
-        f"1. In the step description, provide ONLY the exact information for each action type specified above without any additional text.\n"
-        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts.\n"
+        f"1. In the action description, provide ONLY the exact information related to each action type specified above without any additional text.\n"
+        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts."
+        f" Pay close attention to the cursor position and shape. Ignore the subtitle if it's showing up on the screen.\n"
         f"3. If you see that the last action didn't perform correctly based on the current status being shown on the screen, you can try again using a better alternative action that you think to be more effective.\n"
         f"4. If the last action is a mouse action and you see that it didn't perform correctly, you can also try again with the same mouse action but try better coordinates for more accuracy.\n"
         f"5. If the goal requires interacting with an application, always provide an open_app action to open and focus on that application before performing any other actions on that application.\n"
@@ -389,10 +390,10 @@ def parse_assistant_result(result):
             if start_idx != -1 and end_idx != -1:
                 action_json = remaining_text[start_idx:end_idx]
                 action_data = json.loads(action_json)
-                action = action_data['actions'][0]
+                action = action_data['action'][0]
                 if (action['act'] == 'press_key' and 
-                    ('windows + d' in action['step'].lower() or 
-                     'win + d' in action['step'].lower())):
+                    ('windows + d' in action['detail'].lower() or 
+                     'win + d' in action['detail'].lower())):
                     is_desktop_focus = True
         except:
             pass
@@ -535,17 +536,17 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
                 speaker("Action execution failed")
                 try:
                     action_data = json.loads(next_action)
-                    action = action_data['actions'][0]
-                    executed_actions.append(f"FAILED - {action['act']}: {action['step']}")
+                    action = action_data['action'][0]
+                    executed_actions.append(f"FAILED - {action['act']}: {action['detail']}")
                 except Exception as e:
                     executed_actions.append(f"FAILED - {str(next_action)}")
                 return "Task incomplete: Action execution failed"
             
             try:
                 action_data = json.loads(next_action)
-                action = action_data['actions'][0]
+                action = action_data['action'][0]
                 repeat_str = f", repeat: {action.get('repeat', 1)}" if action.get('repeat', 1) and action.get('repeat', 1) > 1 else ", repeat: 1"
-                executed_actions.append(f"{action['act']}: {action['step']} at {action.get('coordinates', 'N/A')}{repeat_str}")
+                executed_actions.append(f"{action['act']}: {action['detail']} at {action.get('coordinates', 'N/A')}{repeat_str}")
             except Exception as e:
                 print_to_chat(f"Error parsing action JSON: {str(e)}")
                 executed_actions.append(str(next_action))
@@ -560,17 +561,45 @@ def execute_optimized_action(action_json):
     """Execute action using coordinates from the action JSON."""
     try:
         if isinstance(action_json, str):
-            action_json = action_json.replace('```json', '').replace('```', '').strip()
-            start_idx = action_json.find('{')
-            end_idx = action_json.rfind('}') + 1
-            if start_idx != -1 and end_idx != -1:
-                action_json = action_json[start_idx:end_idx]
+            # First try to parse as-is
+            try:
+                instructions = json.loads(action_json)
+            except Exception:
+                # If that fails, try to clean up the JSON string
+                action_json = action_json.replace('```json', '').replace('```', '').strip()
+                # Remove trailing dots and commas
+                action_json = re.sub(r'[.,]\s*}$', '}', action_json)
+                
+                start_idx = action_json.find('{')
+                end_idx = action_json.rfind('}') + 1
+                if start_idx != -1 and end_idx != -1:
+                    action_json = action_json[start_idx:end_idx]
+                
+                # Replace newlines in text content with \n
+                action_json = re.sub(r'"(?:detail|Detail)":\s*"([^"]*)"', 
+                    lambda m: f'"detail": "{m.group(1).replace(chr(10), "\\n")}"',
+                    action_json, flags=re.IGNORECASE)
+                
+                # Normalize key names to lowercase
+                action_json = re.sub(r'"(?:act|Act)":', '"act":', action_json, flags=re.IGNORECASE)
+                action_json = re.sub(r'"(?:detail|Detail)":', '"detail":', action_json, flags=re.IGNORECASE)
+                action_json = re.sub(r'"(?:repeat|Repeat)":', '"repeat":', action_json, flags=re.IGNORECASE)
+                action_json = re.sub(r'"(?:coordinates|Coordinates)":', '"coordinates":', action_json, flags=re.IGNORECASE)
+                
+                instructions = json.loads(action_json)
+        else:
+            instructions = action_json
+            
+        action = instructions.get('action', [{}])[0]
         
-        instructions = json.loads(action_json)
-        action = instructions.get('actions', [{}])[0]
-        
-        if 'act' not in action or 'step' not in action:
-            raise ValueError("Invalid action format: missing 'act' or 'step'")
+        if 'act' not in action or 'detail' not in action:
+            # Check for case-insensitive keys
+            act = next((v for k, v in action.items() if k.lower() == 'act'), None)
+            detail = next((v for k, v in action.items() if k.lower() == 'detail'), None)
+            if act is None or detail is None:
+                raise ValueError("Invalid action format: missing 'act' or 'detail'")
+            action['act'] = act
+            action['detail'] = detail
         
         # Handle null/None repeat values
         try:
@@ -612,23 +641,11 @@ def execute_optimized_action(action_json):
                 return False
 
         def handle_text_entry():
-            """Handle text entry with Vietnamese language support."""
-            message_writer_agent = [{
-                "role": "user",
-                "content":  f"You're an AI Agent called Writer that processes the goal and only returns the final text goal.\n"
-                            f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines.\n"
-                            f"If the goal is a link, media or a search string, just return the result string."
-            }, {
-                "role": "system",
-                "content": f"Goal: {action['step']}"
-            }]
-            
-            text_to_write = api_call(message_writer_agent, max_tokens=1000)
-            
+            text_to_write = action['detail']
             def write_once():
                 try:
                     import pyperclip
-                    original_clipboard = pyperclip.paste()  # Save current clipboard
+                    original_clipboard = pyperclip.paste()
                     try:
                         pyperclip.copy(text_to_write)
                         pyautogui.hotkey('ctrl', 'v')
@@ -643,9 +660,9 @@ def execute_optimized_action(action_json):
             return repeat_action(write_once)
         
         def handle_open_app():
-            app_title = get_application_title(action['step'])
+            app_title = get_application_title(action['detail'])
             if app_title is None:
-                print_to_chat(f"Could not find application: {action['step']}")
+                print_to_chat(f"Could not find application: {action['detail']}")
                 return False
             return activate_window_title(app_title)
 
@@ -679,13 +696,13 @@ def execute_optimized_action(action_json):
             "double_click": lambda: perform_mouse_action(x, y, "double", repeat) if x is not None and y is not None else False,
             "right_click": lambda: perform_mouse_action(x, y, "right", repeat) if x is not None and y is not None else False,
             "drag": lambda: repeat_action(perform_drag_action) if x is not None and y is not None and 'end_pos' in action else False,
-            "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['step'])),
-            "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['step'].split(" and click ")[0]) if x is not None and y is not None else False,
+            "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['detail'])),
+            "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['detail'].split(" and click ")[0]) if x is not None and y is not None else False,
             "text_entry": handle_text_entry,
-            "scroll": lambda: repeat_action(lambda: scroll(action['step'])),
+            "scroll": lambda: repeat_action(lambda: scroll(action['detail'])),
             "open_app": handle_open_app,
-            "time_sleep": lambda: repeat_action(lambda: time.sleep(float(action['step']))) if action['step'].isdigit() else 1,
-            "execute_rpa_task": lambda: execute_rpa_task(action['step'], repeat)
+            "time_sleep": lambda: repeat_action(lambda: time.sleep(float(action['detail']))) if action['detail'].isdigit() else 1,
+            "execute_rpa_task": lambda: execute_rpa_task(action['detail'], repeat)
         }
 
         if action['act'] in action_map:
@@ -805,12 +822,12 @@ def scroll(target):
     time.sleep(0.3)  # Wait for scroll to complete
 
 def execute_rpa_task(task_name, repeat=1):
-    """Execute a saved RPA task by finding task names in the step description"""
+    """Execute a saved RPA task by finding task names in the action description"""
     try:
         # Load all available tasks
         tasks = load_tasks()
         
-        # Look for any task names in the step description that match our task keys
+        # Look for any task names in the action description that match our task keys
         found_tasks = []
         for task_key in tasks.keys():
             if task_key in task_name:
@@ -840,7 +857,7 @@ def execute_rpa_task(task_name, repeat=1):
                     if is_stop_requested():
                         return False
                         
-                    success = execute_optimized_action(json.dumps({"actions": [action]}))
+                    success = execute_optimized_action(json.dumps({"action": [action]}))
                     if not success:
                         print_to_chat(f"Failed to execute action in task {task_key}")
                         return False
@@ -920,7 +937,7 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
         if not is_field_input_area_active():
             fast_act(goal, app_name=app_name, original_goal=original_goal)
 
-    # Type the text with Vietnamese support
+    # Type the text
     try:
         import pyperclip
         original_clipboard = pyperclip.paste()  # Save current clipboard

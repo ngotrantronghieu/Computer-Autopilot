@@ -1030,7 +1030,7 @@ class TaskRecorder(QDialog):
                         # Create drag action
                         action = {
                             "act": "drag",
-                            "step": f"Drag from ({self.drag_start[0]}, {self.drag_start[1]}) to ({x}, {y})",
+                            "detail": f"Drag from ({self.drag_start[0]}, {self.drag_start[1]}) to ({x}, {y})",
                             "coordinates": f"x={self.drag_start[0]}, y={self.drag_start[1]} to x={x}, y={y}",
                             "repeat": 1
                         }
@@ -1042,7 +1042,7 @@ class TaskRecorder(QDialog):
                 # If we get here, it was a click, not a drag
                 action = {
                     "act": "click_element",
-                    "step": f"Click at ({x}, {y})",
+                    "detail": f"Click at ({x}, {y})",
                     "coordinates": f"x={x}, y={y}",
                     "repeat": 1
                 }
@@ -1052,7 +1052,7 @@ class TaskRecorder(QDialog):
             elif button == mouse.Button.right:
                 action = {
                     "act": "right_click",
-                    "step": f"Right click at ({x}, {y})",
+                    "detail": f"Right click at ({x}, {y})",
                     "coordinates": f"x={x}, y={y}",
                     "repeat": 1
                 }
@@ -1067,7 +1067,7 @@ class TaskRecorder(QDialog):
         direction = "up" if dy > 0 else "down"
         action = {
             "act": "scroll",
-            "step": direction,
+            "detail": direction,
             "repeat": 1
         }
         self.events_queue.put(action)
@@ -1126,7 +1126,7 @@ class TaskRecorder(QDialog):
             
         action = {
             "act": "text_entry",
-            "step": self.current_text,
+            "detail": self.current_text,
             "repeat": 1
         }
 
@@ -1139,7 +1139,7 @@ class TaskRecorder(QDialog):
                                    Q_ARG(str, str(action)))
         else:
             # Update existing text entry action
-            self.current_text_action["step"] = self.current_text
+            self.current_text_action["detail"] = self.current_text
             # Find and update the list widget item
             for i in range(self.actions_list.count()):
                 item = self.actions_list.item(i)
@@ -1178,7 +1178,7 @@ class TaskRecorder(QDialog):
         if self.current_text:
             action = {
                 "act": "text_entry",
-                "step": self.current_text,
+                "detail": self.current_text,
                 "repeat": 1
             }
             self.events_queue.put(action)
@@ -1200,7 +1200,7 @@ class TaskRecorder(QDialog):
         
         action = {
             "act": "press_key",
-            "step": key_str,
+            "detail": key_str,
             "repeat": 1
         }
         self.events_queue.put(action)
@@ -1263,19 +1263,19 @@ class TaskRecorder(QDialog):
         
         # For text/key based actions
         elif action1['act'] in ['press_key', 'text_entry']:
-            return action1['step'] == action2['step']
+            return action1['detail'] == action2['detail']
         
         # For time-based actions
         elif action1['act'] == 'time_sleep':
-            return float(action1['step']) == float(action2['step'])
+            return float(action1['detail']) == float(action2['detail'])
         
         # For app-related actions
         elif action1['act'] == 'open_app':
-            return action1['step'].lower() == action2['step'].lower()
+            return action1['detail'].lower() == action2['detail'].lower()
         
         # For scroll actions
         elif action1['act'] == 'scroll':
-            return action1['step'] == action2['step']
+            return action1['detail'] == action2['detail']
             
         return False
 
@@ -1307,7 +1307,7 @@ class TaskRecorder(QDialog):
         if current_time - self.last_move_time > self.move_threshold:
             action = {
                 "act": "move_to",
-                "step": f"Move to ({x}, {y})",
+                "detail": f"Move to ({x}, {y})",
                 "coordinates": f"x={x}, y={y}",
                 "repeat": 1
             }
@@ -1349,8 +1349,8 @@ class ActionEditor(QDialog):
         # Action description
         desc_layout = QHBoxLayout()
         desc_layout.addWidget(QLabel("Description:"))
-        self.step_desc = QLineEdit()
-        desc_layout.addWidget(self.step_desc)
+        self.act_desc = QLineEdit()
+        desc_layout.addWidget(self.act_desc)
         layout.addLayout(desc_layout)
         
         # Add repeat count for all actions
@@ -1564,7 +1564,7 @@ class ActionEditor(QDialog):
             self.action_type.setCurrentText(action['act'])
             
             # Set description
-            self.step_desc.setText(action.get('step', ''))
+            self.act_desc.setText(action.get('detail', ''))
             
             # Set repeat count
             self.repeat_count.setValue(action.get('repeat', 1))
@@ -1577,7 +1577,7 @@ class ActionEditor(QDialog):
                 if action['act'] == 'hold_key_and_click':
                     self.hold_x_coord.setValue(x)
                     self.hold_y_coord.setValue(y)
-                    key = action['step'].split(" and click")[0]
+                    key = action['detail'].split(" and click")[0]
                     self.hold_key_input.setCurrentText(key)
                 elif action['act'] == 'drag':
                     # Parse drag coordinates
@@ -1592,9 +1592,9 @@ class ActionEditor(QDialog):
                     self.x_coord.setValue(x)
                     self.y_coord.setValue(y)
             elif action['act'] == 'text_entry':
-                self.text_input.setText(action['step'])
+                self.text_input.setText(action['detail'])
             elif action['act'] == 'press_key':
-                key_parts = action['step'].split(' + ')
+                key_parts = action['detail'].split(' + ')
                 for part in key_parts:
                     part = part.strip()
                     # Update the check to handle Windows key variations
@@ -1610,11 +1610,11 @@ class ActionEditor(QDialog):
                     else:
                         self.key_combo.setCurrentText(part)
             elif action['act'] == 'time_sleep':
-                self.wait_time.setValue(int(action['step']))
+                self.wait_time.setValue(int(action['detail']))
             elif action['act'] == 'open_app':
-                self.app_input.setText(action['step'])
+                self.app_input.setText(action['detail'])
             elif action['act'] == 'scroll':
-                self.scroll_direction.setCurrentText(action['step'])
+                self.scroll_direction.setCurrentText(action['detail'])
                 
         except Exception as e:
             print_to_chat(f"Error loading action: {str(e)}")
@@ -1627,7 +1627,7 @@ class ActionEditor(QDialog):
             # Base action data with repeat count
             action = {
                 "act": action_type,
-                "step": self.step_desc.text() or "Custom action step",
+                "detail": self.act_desc.text() or "Custom action detail",
                 "repeat": self.repeat_count.value()
             }
             
@@ -1635,11 +1635,11 @@ class ActionEditor(QDialog):
             if action_type == "hold_key_and_click":
                 key = self.hold_key_input.currentText()
                 action["coordinates"] = f"x={self.hold_x_coord.value()}, y={self.hold_y_coord.value()}"
-                action["step"] = f"{key} and click"
+                action["detail"] = f"{key} and click"
             elif action_type in ["move_to", "click_element", "right_click", "double_click_element"]:
                 action["coordinates"] = f"x={self.x_coord.value()}, y={self.y_coord.value()}"
             elif action_type == "text_entry":
-                action["step"] = self.text_input.toPlainText()
+                action["detail"] = self.text_input.toPlainText()
             elif action_type == "press_key":
                 key_parts = []
                 if self.ctrl_check.isChecked(): key_parts.append("Ctrl")
@@ -1647,13 +1647,13 @@ class ActionEditor(QDialog):
                 if self.shift_check.isChecked(): key_parts.append("Shift")
                 if self.win_check.isChecked(): key_parts.append("Windows")
                 key_parts.append(self.key_combo.currentText())
-                action["step"] = " + ".join(key_parts)
+                action["detail"] = " + ".join(key_parts)
             elif action_type == "time_sleep":
-                action["step"] = str(self.wait_time.value())
+                action["detail"] = str(self.wait_time.value())
             elif action_type == "open_app":
-                action["step"] = self.app_input.text()
+                action["detail"] = self.app_input.text()
             elif action_type == "scroll":
-                action["step"] = self.scroll_direction.currentText()
+                action["detail"] = self.scroll_direction.currentText()
             elif action_type == "drag":
                 action["coordinates"] = f"x={self.start_x.value()}, y={self.start_y.value()} to x={self.end_x.value()}, y={self.end_y.value()}"
                 
@@ -2372,7 +2372,7 @@ class RPATab(QWidget):
                     self.statusUpdate.emit(f"Executing: {self.current_task} ({action_status})", self.is_executing, self.is_paused)
                     
                     # Execute single action
-                    success = execute_optimized_action(json.dumps({"actions": [action]}))
+                    success = execute_optimized_action(json.dumps({"action": [action]}))
                     if not success:
                         self.update_status("Action execution failed!")
                         self.stop_execution()
@@ -3062,13 +3062,14 @@ class ModernChatInterface(QMainWindow):
         request_stop()
         self.set_send_mode()
 
-    def complete_task(self, result=None):
+    def complete_task(self, result=None, speak=True):
         """Helper function to handle task completion"""
         if not self.paused_execution:
             self.set_send_mode()
             if result:
                 print_to_chat(result, is_user=False)
-                speaker(result)
+                if speak:
+                    speaker(result)
 
     def handle_pause_resume(self):
         """Handle pause/resume button click"""
@@ -3181,7 +3182,7 @@ class ModernChatInterface(QMainWindow):
                                 temperature=0.7,
                                 max_tokens=1000
                             )
-                            self.complete_task(joyful_response)
+                            self.complete_task(joyful_response, speak=False)
                 
                 # if not self.isActiveWindow():
                 #     self.show()
