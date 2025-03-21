@@ -343,7 +343,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- drag: The starting position to click and drag from, and the ending position to release at (Coordinates required for both positions).\n"
         f"- press_key: The key or the combination of keys to press. (Example: \"Ctrl + T\").\n"
         f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
-        f"- text_entry: The specific text to type or write. It can be a word, a sentence, a paragraph or an entire essay. Use \'\\n\' to indicate a new line. (Example: \"Hello World\").\n"
+        f"- text_entry: The specific text to type or write. It can be a word, a sentence, a paragraph or an entire essay. Always use \'\\n\' to indicate a new line when writing a multi-line text. Avoid jump lines! (Example: \"Hello!\\nMy name is John.\").\n"
         f"- scroll: The direction to scroll. (Each scroll action will scroll the screen for 850 pixels).\n"
         f"- open_app: The application name to open or focus on.\n"
         f"- time_sleep: The duration to wait for.\n"
@@ -561,45 +561,17 @@ def execute_optimized_action(action_json):
     """Execute action using coordinates from the action JSON."""
     try:
         if isinstance(action_json, str):
-            # First try to parse as-is
-            try:
-                instructions = json.loads(action_json)
-            except Exception:
-                # If that fails, try to clean up the JSON string
-                action_json = action_json.replace('```json', '').replace('```', '').strip()
-                # Remove trailing dots and commas
-                action_json = re.sub(r'[.,]\s*}$', '}', action_json)
-                
-                start_idx = action_json.find('{')
-                end_idx = action_json.rfind('}') + 1
-                if start_idx != -1 and end_idx != -1:
-                    action_json = action_json[start_idx:end_idx]
-                
-                # Replace newlines in text content with \n
-                action_json = re.sub(r'"(?:detail|Detail)":\s*"([^"]*)"', 
-                    lambda m: f'"detail": "{m.group(1).replace(chr(10), "\\n")}"',
-                    action_json, flags=re.IGNORECASE)
-                
-                # Normalize key names to lowercase
-                action_json = re.sub(r'"(?:act|Act)":', '"act":', action_json, flags=re.IGNORECASE)
-                action_json = re.sub(r'"(?:detail|Detail)":', '"detail":', action_json, flags=re.IGNORECASE)
-                action_json = re.sub(r'"(?:repeat|Repeat)":', '"repeat":', action_json, flags=re.IGNORECASE)
-                action_json = re.sub(r'"(?:coordinates|Coordinates)":', '"coordinates":', action_json, flags=re.IGNORECASE)
-                
-                instructions = json.loads(action_json)
-        else:
-            instructions = action_json
-            
+            action_json = action_json.replace('```json', '').replace('```', '').strip()
+            start_idx = action_json.find('{')
+            end_idx = action_json.rfind('}') + 1
+            if start_idx != -1 and end_idx != -1:
+                action_json = action_json[start_idx:end_idx]
+        
+        instructions = json.loads(action_json)
         action = instructions.get('action', [{}])[0]
         
         if 'act' not in action or 'detail' not in action:
-            # Check for case-insensitive keys
-            act = next((v for k, v in action.items() if k.lower() == 'act'), None)
-            detail = next((v for k, v in action.items() if k.lower() == 'detail'), None)
-            if act is None or detail is None:
-                raise ValueError("Invalid action format: missing 'act' or 'detail'")
-            action['act'] = act
-            action['detail'] = detail
+            raise ValueError("Invalid action format: missing 'act' or 'detail'")
         
         # Handle null/None repeat values
         try:
