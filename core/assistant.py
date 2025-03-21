@@ -9,13 +9,12 @@ import queue
 import schedule
 import re
 import sys
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton,
                               QVBoxLayout, QHBoxLayout, QLineEdit, QScrollArea,
-                              QLabel, QFrame, QSlider, QCheckBox, QDialog, QTabWidget, 
-                              QRadioButton, QTextEdit, QDialogButtonBox, QMessageBox,
-                              QListWidget, QComboBox, QStackedWidget, QSpinBox,
-                              QDoubleSpinBox, QListWidgetItem, QGroupBox, QTimeEdit,
-                              QDateEdit)
+                              QLabel, QFrame, QSlider, QCheckBox, QDialog, QTabWidget,
+                              QTextEdit, QDialogButtonBox, QMessageBox, QListWidget,
+                              QComboBox, QStackedWidget, QSpinBox, QDoubleSpinBox,
+                              QListWidgetItem, QGroupBox, QTimeEdit, QDateEdit)
 from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 from voice import speaker, set_volume, set_subtitles

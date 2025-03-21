@@ -20,7 +20,7 @@ from core_api import api_call
 from voice import speaker
 from utils import print_to_chat
 from pywinauto import Application
-from tasks import load_tasks, get_task
+from tasks import load_tasks
 warnings.simplefilter("ignore", UserWarning)
 if os.name == 'nt':  # Windows only
     from subprocess import CREATE_NO_WINDOW
