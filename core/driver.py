@@ -308,18 +308,19 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         focused_window_info = "Focused Window Details: There are no details about the focused window."
 
     return (
-        f"You are an AI Agent called Computer Autopilot that is capable of operating freely on Windows one action at a time to accomplish the user's goal."
-        f"You will be given a goal that the user wants to achieve, a screenshot of the user's current Windows screen along with the previous actions you've performed. Based on these:\n"
+        f"You are an AI Agent called Computer Autopilot that is capable of operating freely on Windows by generating actions in sequence to accomplish the user's goal."
+        f"Below is a goal that the user wants to achieve, a screenshot of the user's current Windows screen along with the previous actions you've performed. Based on these:\n"
         f"1. Determine if the goal has been achieved based on the current status being shown on the screen.\n"
-        f"2. If the goal is not achieved:\n"
-        f"a. Generate a friendly response message telling the user what you're going to do. Also provide the UI elements state or the results of your analysis if needed. In the response message, respond in the same language the user is using in the goal."
-        f" Remember that you're the one who performed all the previous actions, not the user themselves so try to respond as if you did all the previous actions using your previous response messages and previous actions as contexts.\n"
-        f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually, respond with PAUSE:<reasons>\n"
-        f"- If the task cannot be completed for some reasons or if you don't know what to do next, respond with STOP:<reasons>. The sign to indicate that a task cannot be completed is you see the same action is performed too many times without achieving the goal.\n"
-        f"b. If you choose to continue and not to pause or stop, provide only ONE next action in the following JSON format below to continue achieving the goal:\n"
-        f"- For any action, provide an action description explaining the exact details related to that action mentioned below.\n"
+        f"2. If the goal is not achieved (TASK_COMPLETED: No):\n"
+        f"a. Generate a friendly response message telling the user what you're going to do in the same language that the user is using in the goal. In the response message, you can provide the UI elements state or the results of your analysis if needed."
+        f" Remember that you're the one who performed all the previous actions, not the user themselves so use only the pronoun I, avoid using the pronoun you and try to respond as if you did all the previous actions using your previous response messages mentioned below along with the previous actions you've performed as contexts."
+        f" In the response message:\n"
+        f"- If you want the user to provide additional details related to the action or if the action requires the user to do something manually by themselves, respond with PAUSE:<reasons>\n"
+        f"- If the task cannot be completed for some reasons or if you're not sure what to do next, respond with STOP:<reasons>. The sign to indicate that a task cannot be completed is you see the same action is performed too many times without achieving the goal.\n"
+        f"b. If you choose to continue and not to pause or stop, provide only ONE next action to continue achieving the goal:\n"
+        f"- For any action, provide an action description explaining the exact details related to that action.\n"
         f"- For any mouse action, provide the coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts. For other actions, don't include the coordinates in the JSON.\n"
-        f"- Specify the number of repeats needed.\n\n"
+        f"- Specify the number of repeats needed for action that requires multiple repeats. If not specified, the action will be performed only once.\n\n"
         f"Respond in the following format:\n"
         f"TASK_COMPLETED: <Yes/No>\n"
         f"RESPONSE_MESSAGE: <A friendly response message related to what you're doing>\n"
@@ -335,8 +336,8 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"        }}\n"
         f"    ]\n"
         f"}}\n\n"
-        f"Available action types and corresponding action descriptions to provide:\n"
-        f"- move_to: The element or position we want to move the mouse cursor to.\n"
+        f"Here are all available action types along with their corresponding action descriptions to provide:\n"
+        f"- move_to: The element or position to move the mouse cursor to.\n"
         f"- click: The element or position to click on.\n"
         f"- double_click: The element or position to double click on.\n"
         f"- right_click: The element or position to right click on.\n"
@@ -344,33 +345,33 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- press_key: The key or the combination of keys to press. (Example: \"Ctrl + T\").\n"
         f"- hold_key_and_click: The key to hold and the position to click on while holding the key.\n"
         f"- text_entry: The specific text to type or write. It can be a word, a sentence, a paragraph or an entire essay. Always use \'\\n\' to indicate a new line when writing a multi-line text. Avoid jump lines! (Example: \"Hello!\\nMy name is John.\").\n"
-        f"- scroll: The direction to scroll. (Each scroll action will scroll the screen for 850 pixels).\n"
-        f"- open_app: The application name to open or focus on.\n"
-        f"- time_sleep: The duration to wait for.\n"
-        f"- execute_rpa_task: The task name to execute. (Use this action to execute a saved RPA task).\n"
+        f"- scroll: The direction to scroll <up, down, left, right>. (Each scroll action will scroll the screen for 850 pixels in the specified direction).\n"
+        f"- open_app: The name of the application to open or focus on.\n"
+        f"- time_sleep: The duration to wait for in seconds.\n"
+        f"- execute_rpa_task: The name of the RPA task to execute. (Use this action to execute a saved RPA task).\n"
         f"{rpa_context}\n\n"
         f"Important Rules:\n"
         f"1. In the action description, provide ONLY the exact information related to each action type specified above without any additional text.\n"
-        f"2. Generate the next action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts."
-        f" Pay close attention to the cursor position and shape. Ignore the subtitle if it's showing up on the screen.\n"
+        f"2. Generate action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts."
+        f" Pay close attention to the cursor position and shape. Ignore the subtitle if it's currently showing up on the screen.\n"
         f"3. If you see that the last action didn't perform correctly based on the current status being shown on the screen, you can try again using a better alternative action that you think to be more effective.\n"
-        f"4. If the last action is a mouse action and you see that it didn't perform correctly, you can also try again with the same mouse action but try better coordinates for more accuracy.\n"
+        f"4. If the last action is a mouse action and you see that it didn't perform correctly, you can also try again with the same mouse action but try to modify the previous coordinates to improve the accuracy.\n"
         f"5. If the goal requires interacting with an application, always provide an open_app action to open and focus on that application before performing any other actions on that application.\n"
         f"6. Before providing any text_entry action on an input area, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
         f"7. Always prioritize using a press_key action if it can replace a mouse action that results in the same outcome.\n"
         f"8. Prioritize generating execute_rpa_task action to achieve the goal more efficiently if available.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
-        f"Previous actions performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
+        f"Previous actions you've performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
         f"Additional contexts:\n"
         f"{screen_info}\n\n"
         f"{focused_window_info}\n\n"
         f"{f'{ui_elements}\n\n' if ui_elements else ''}"
         f"{cursor_info}\n\n"
-        f"Here are the all the programs on the user's Windows:\n"
+        f"Here are lists of all programs on the user's Windows:\n"
         f"All currently opened programs:\n{last_programs_list}\n\n"
         f"All installed programs (Registry):\n{installed_apps_registry}\n\n"
         f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n\n"
-        f"Additional guides for specific applications:\n{app_context}\n\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
+        f"Additional guides:\n{app_context}\n\nKeyboard Shortcuts:\n{keyboard_shortcuts}"
     )
 
 def parse_assistant_result(result):
@@ -447,7 +448,7 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
         if called_from == "assistant":
             print_to_chat(f"Called from: {called_from}")
         elif not resumed:
-            speaker(f"Assistant is analyzing the request:", additional_text=f"\"{original_goal}\".")
+            speaker(f"I'm analyzing your request:", additional_text=f"\"{original_goal}\"")
         else:
             speaker("Resuming task execution.")
 
@@ -456,7 +457,7 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
 
     # Add available RPA tasks to context
     rpa_tasks = get_available_rpa_tasks()
-    rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are no available RPA tasks."
+    rpa_context = f"Available RPA Tasks:\n{rpa_tasks}" if rpa_tasks else "Available RPA Tasks: There are currently no available RPA tasks."
 
     # Get screen resolution
     screen_width, screen_height = pyautogui.size()
@@ -710,18 +711,35 @@ def click_mouse(click_type="single", repeat=1, interval=0.1):
             pyautogui.doubleClick(current_x, current_y)
         elif click_type == "right":
             pyautogui.rightClick(current_x, current_y)
-        elif click_type == "hold":
-            pyautogui.mouseDown(current_x, current_y)
-            time.sleep(0.12)
-            pyautogui.mouseUp(current_x, current_y)
             
         if repeat > 1:
             time.sleep(interval)
 
-def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1):
+def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1, hold_key=None):
     """Combined function to move mouse and perform click actions."""
     move_mouse(x, y)
-    click_mouse(action_type, repeat, interval)
+    
+    if hold_key and action_type == "hold":
+        # Map the key if needed
+        key_mapping = {
+            'win': 'winleft',
+            'windows': 'winleft',
+            'escape': 'esc',
+            'space bar': 'space',
+            'spacebar': 'space',
+        }
+        key = key_mapping.get(hold_key.lower(), hold_key.lower())
+        
+        # Hold the key, perform click, then release
+        try:
+            pyautogui.keyDown(key)
+            time.sleep(0.1)  # Small delay to ensure key is registered
+            click_mouse("single", repeat, interval)
+            time.sleep(0.1)  # Small delay before releasing
+        finally:
+            pyautogui.keyUp(key)
+    else:
+        click_mouse(action_type, repeat, interval)
 
 def perform_simulated_keypress(press_key):
     """Simulate keyboard key press."""
@@ -978,4 +996,5 @@ create_database(database_file)
 # Example Usage
 if __name__ == "__main__":
     assistant(assistant_goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge")
+
 
