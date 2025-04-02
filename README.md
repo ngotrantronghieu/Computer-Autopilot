@@ -64,7 +64,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 # Installation
 
 ## Option 1: Download Release (Recommended)
-1. Visit the [Releases](https://github.com/ngotrantronghieu/computerAutopilot/releases) section
+1. Visit the [Releases](https://github.com/ngotrantronghieu/Computer-Autopilot/releases) section
 2. Download the latest release
 3. Extract the downloaded file
 4. Run `assistant.exe`
