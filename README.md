@@ -72,7 +72,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 ## Option 2: From Source
 ```bash
 # Install requirements:
-cd computerAutopilot
+cd Computer-Autopilot
 pip install -r .\requirements.txt
 
 # Execute the assistant:
