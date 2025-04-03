@@ -78,15 +78,16 @@ pip install -r .\requirements.txt
 # Execute the assistant:
 cd .\core
 python ./assistant.py
+```
 
-# Configuration:
+
+## Configuration:
 1. Visit https://docs.litellm.ai/docs/providers for LLM Model options
 2. Configure in app settings:
    - LLM Model
    - LLM Vision Model
    - API Keys
 3. Optional: Use environment variables for API keys
-```
 
 
 # Usage
