@@ -11,7 +11,9 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 - Modern GUI with chat interface and voice input capabilities
 - RPA (Robotic Process Automation) tab for managing automated tasks
 - Actions generation for UI applications using natural language
+- Advanced web assistant for browser automation and webpage interaction
 - Supports all Win32api applications including: Microsoft Edge, Chrome, Firefox, OperaGX, Discord, Telegram, Spotify
+- Configurable performance settings for both desktop and web automation
 - Minimizable to mini chat or mini control interface for better workflow
 
 
@@ -43,12 +45,22 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
    - Communication apps (Telegram, Discord)
    - General Windows applications
 
-6. **Customizable Settings**:
+6. **Web Assistant Functionality**:
+   - Advanced browser automation
+   - Webpage element detection and interaction
+   - Form filling and submission
+   - JavaScript execution
+   - Multi-tab management
+   - Robust selector extraction (CSS, XPath)
+
+7. **Customizable Settings**:
    - LLM Model selection
    - Vision LLM Model configuration
    - API key management
    - Environment variable support
    - Action delay customization
+   - Web action delay configuration
+   - Performance tuning options
    - Windows startup option
 
 
@@ -59,6 +71,9 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 4. **Cross-Application Support**: Seamless multi-app integration
 5. **Visual Analysis**: Screen content interpretation
 6. **Voice Integration**: Speech input and output capabilities
+7. **Web Automation**: Advanced browser interaction with element detection
+8. **Selector Extraction**: Robust CSS and XPath selector generation
+9. **Performance Optimization**: Configurable action delays and execution parameters
 
 
 # Installation
@@ -87,6 +102,11 @@ python ./assistant.py
    - LLM Model
    - LLM Vision Model
    - API Keys
+   - Performance Settings:
+     - Action delay
+     - Maximum attempts
+     - Web action delay
+     - Web maximum attempts
 3. Optional: Use environment variables for API keys
 
 
@@ -111,14 +131,22 @@ python ./assistant.py
    - Execute saved tasks
    - Monitor task status
 
-4. **Mini Interfaces**:
+4. **Web Assistant**:
+   - Automate browser tasks with natural language
+   - Interact with webpage elements (buttons, forms, links)
+   - Navigate between websites and tabs
+   - Extract information from webpages
+   - Execute custom JavaScript
+   - Perform complex web workflows
+
+5. **Mini Interfaces**:
    - Minimize to compact chat or control interface
    - Continue interactions while saving screen space
    - Quick access to essential controls
 
-5. **Debug Mode**:
+6. **Debug Mode**:
    - Run `driver.py` for debugging
-   - Test individual functions: `fast_act()`, `assistant()`
+   - Test individual functions: `fast_act()`, `assistant()`, `web_assistant()`
    - Monitor execution flow
 
 

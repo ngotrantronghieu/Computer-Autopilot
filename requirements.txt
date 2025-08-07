@@ -17,5 +17,7 @@ PySide6
 pynput
 schedule
 langdetect
+pyinstaller
 deep_translator
-json5
+seleniumbase
+beautifulsoup4

@@ -1,26 +1,30 @@
-import pygetwindow as gw
-import win32process
-import win32gui
-import pyautogui
-import sqlite3
-import psutil
-import json5 as json
-import time
-import re
-import warnings
-import subprocess
+import json
 import os
-from window_focus import activate_window_title, get_installed_apps_registry
-from mouse_detection import get_cursor_shape
-from window_elements import analyze_app
-from topmost_window import focus_topmost_window
+import psutil
+import pyautogui
+import pygetwindow as gw
+import pyperclip
+import re
+import sqlite3
+import subprocess
+import time
+import warnings
+import win32gui
+import win32process
+from bs4 import BeautifulSoup
+from core_api import api_call
 from core_imaging import imaging
 from last_app import last_programs_list
-from core_api import api_call
-from voice import speaker
-from utils import print_to_chat
+from mouse_detection import get_cursor_shape
 from pywinauto import Application
+from seleniumbase.common.exceptions import TimeoutException
+from seleniumbase import SB
 from tasks import load_tasks
+from topmost_window import focus_topmost_window
+from utils import print_to_chat, print_to_web_chat
+from voice import speaker
+from window_elements import analyze_app
+from window_focus import activate_window_title, get_installed_apps_registry
 warnings.simplefilter("ignore", UserWarning)
 if os.name == 'nt':  # Windows only
     from subprocess import CREATE_NO_WINDOW
@@ -28,6 +32,9 @@ if os.name == 'nt':  # Windows only
 enable_semantic_router_map = True
 _stop_requested = False
 action_cache = {}
+# Global browser and driver instances that persist between tasks
+_sb_instance = None
+_driver = None
 
 def request_stop():
     global _stop_requested
@@ -40,9 +47,13 @@ def clear_stop():
 def is_stop_requested():
     return _stop_requested
 
+def get_settings():
+    from assistant import load_settings
+    return load_settings()
+
 def auto_role(message):
     assistant_call = [{
-        "role": "user", 
+        "role": "system",
         "content": (
             "You are an AI assistant that receives a message from the user and responds with the best role related to the message.\n"
             "You can choose between the following roles and decide what fits the best:\n"
@@ -55,7 +66,7 @@ def auto_role(message):
             "Otherwise, if the user is just asking question or having conversation, choose joyful_conversation."
         )
     }, {
-        "role": "system", 
+        "role": "user",
         "content": f"Message: {message}"
     }]
     
@@ -164,7 +175,7 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
     installed_apps_ms_store = get_installed_apps_ms_store()
         
     goal_app = [{
-        "role": "user",
+        "role": "system",
         "content":  f"You are an AI Assistant called App Selector that receives a list of programs and responds only with the most suitable program to achieve the goal.\n"
                     f"Only respond with the window name or the program name without the ending extension.\n"
                     f"If no suitable application is found in the provided lists, respond with 'NO_APP'.\n"
@@ -172,7 +183,7 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
                     f"All installed programs (Registry):\n{installed_apps_registry}\n"
                     f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}"
     }, {
-        "role": "system",
+        "role": "user",
         "content":  f"Goal: {goal}\n"
     }]
 
@@ -431,16 +442,16 @@ def parse_assistant_result(result):
         
     return task_completed, next_action
 
-def assistant(assistant_goal="", executed_actions=None, additional_context=None, resumed=False, called_from=None):
+def assistant(goal="", executed_actions=None, additional_context=None, resumed=False, called_from=None):
     """Main assistant function for processing and executing user goals."""
     clear_stop()
     
-    if not assistant_goal:
+    if not goal:
         speaker("ERROR: No prompt provided. Please provide a prompt to the assistant.")
         time.sleep(10)
         raise ValueError("ERROR: No step provided.")
     else:
-        original_goal = assistant_goal
+        original_goal = goal
         if additional_context:
             original_goal = f"{original_goal}. {additional_context}"
         print_to_chat(f"Prompt: {original_goal}")
@@ -468,8 +479,7 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
     installed_apps_ms_store = get_installed_apps_ms_store()
     
     # Get settings with defaults
-    from assistant import load_settings
-    settings = load_settings()
+    settings = get_settings()
     max_attempts = settings.get("max_attempts", 20)
     action_delay = settings.get("action_delay", 1.5)
 
@@ -525,12 +535,12 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
             print_to_chat(f"Error storing response message: {e}")
         
         if task_completed:
-            return "Task completed. Can I help you with something else?"
+            return "Task completed! Can I help you with something else?"
         
         print_to_chat(f"Next action: {next_action}")
 
         if next_action:
-            success = execute_optimized_action(next_action)
+            success = execute_action(next_action)
             
             if not success:
                 print_to_chat("Action execution failed!")
@@ -558,7 +568,92 @@ def assistant(assistant_goal="", executed_actions=None, additional_context=None,
     
     return "Task incomplete! Task execution aborted!"
 
-def execute_optimized_action(action_json):
+def identify_element_coordinates(element_description):
+    """Use LLM to identify element coordinates from description and current screen."""
+    try:
+        # Get screen resolution
+        screen_width, screen_height = pyautogui.size()
+        
+        # Prepare prompt for element identification
+        prompt = f"""
+        You are an AI assistant that helps identify UI elements on screen. 
+        I need to find the coordinates of a specific element.
+
+        Screen Resolution: {screen_width}x{screen_height}
+        Element description: {element_description}
+
+        Look at the current screen and identify the exact pixel coordinates (x, y) of the center of the described element.
+
+        IMPORTANT: You must return ONLY the coordinates in the exact format: x=123, y=456
+        Do not include any other text, explanations, or formatting.
+
+        If the element is not found or not clearly visible, return: NOT_FOUND
+        """
+        
+        # Call the assistant to analyze the screenshot and find the element
+        response = imaging(additional_context=prompt, screenshot_size='Full screen')['choices'][0]['message']['content']
+        
+        # Parse the response to extract coordinates
+        if "NOT_FOUND" in response:
+            return None
+            
+        # Extract coordinates from response
+        import re
+        coord_match = re.search(r'x=(\d+),\s*y=(\d+)', response)
+        if coord_match:
+            x = int(coord_match.group(1))
+            y = int(coord_match.group(2))
+            return (x, y)
+        else:
+            print_to_chat(f"Could not parse coordinates from response: {response}")
+            return None
+            
+    except Exception as e:
+        print_to_chat(f"Error identifying element coordinates: {e}")
+        return None
+
+def scroll_until_element_visible(element_description, scroll_direction="down", max_attempts=10):
+    """Scroll until the specified element becomes visible."""
+    try:
+        for attempt in range(max_attempts):
+            print_to_chat(f"Searching for element (attempt {attempt + 1}/{max_attempts}): {element_description}")
+            
+            # Try to find the element
+            coords = identify_element_coordinates(element_description)
+            if coords:
+                print_to_chat(f"Element found at coordinates: {coords}")
+                return coords
+            
+            # Element not found, scroll and try again
+            print_to_chat(f"Element not found, scrolling {scroll_direction}...")
+            scroll(scroll_direction)
+            time.sleep(1)  # Wait for scroll to complete
+        
+        print_to_chat(f"Element '{element_description}' not found after {max_attempts} scroll attempts")
+        return None
+        
+    except Exception as e:
+        print_to_chat(f"Error in scroll until element visible: {e}")
+        return None
+
+def handle_assistant_task(task_description, repeat=1):
+    """Handle assistant task action by calling the main assistant function."""
+    try:
+        for i in range(repeat):
+            print_to_chat(f"Executing assistant task (attempt {i+1}/{repeat}): {task_description}")
+            
+            # Call the main assistant function with the task description
+            assistant(goal=task_description, called_from="rpa_action")
+            
+            if repeat > 1 and i < repeat - 1:
+                time.sleep(1)  # Small delay between repetitions
+                
+        return True
+    except Exception as e:
+        print_to_chat(f"Error executing assistant task: {e}")
+        return False
+
+def execute_action(action_json):
     """Execute action using coordinates from the action JSON."""
     try:
         if isinstance(action_json, str):
@@ -580,25 +675,55 @@ def execute_optimized_action(action_json):
         except (ValueError, TypeError):
             repeat = 1
         
-        coordinates_str = action.get('coordinates', '')
+        # Handle coordinates or element identification
         x = y = None
         
-        if coordinates_str and action['act'] in {"move_to", "click", "double_click", "right_click", "hold_key_and_click", "drag"}:
-            try:
-                # For drag action, parse both start and end coordinates
-                if action['act'] == "drag" and " to " in coordinates_str:
-                    start_coords, end_coords = coordinates_str.split(" to ")
-                    start_x, start_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', start_coords)[0])
-                    end_x, end_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', end_coords)[0])
-                    x, y = start_x, start_y  # Store start position in x,y
-                    action['end_pos'] = (end_x, end_y)  # Store end position
-                else:
-                    coordinates = {k.strip(): float(v.strip()) for k, v in 
-                               (item.split('=') for item in coordinates_str.split(','))}
-                    x, y = coordinates['x'], coordinates['y']
-            except Exception as e:
-                print_to_chat(f"Error parsing coordinates: {e}")
+        # Check if this is an element-based action
+        if action.get('method') == 'element' and 'element_description' in action:
+            # Use LLM to identify element coordinates
+            coords = identify_element_coordinates(action['element_description'])
+            if coords:
+                x, y = coords
+                print_to_chat(f"Element found at: x={x}, y={y}")
+            else:
+                print_to_chat(f"Could not find element: {action['element_description']}")
                 return False
+        elif action.get('method') == 'elements' and action['act'] == 'drag':
+            # Handle element-based drag
+            start_coords = identify_element_coordinates(action['start_element_description'])
+            end_coords = identify_element_coordinates(action['end_element_description'])
+            
+            if start_coords and end_coords:
+                x, y = start_coords
+                action['end_pos'] = end_coords
+                print_to_chat(f"Start element found at: x={x}, y={y}")
+                print_to_chat(f"End element found at: x={end_coords[0]}, y={end_coords[1]}")
+            else:
+                if not start_coords:
+                    print_to_chat(f"Could not find start element: {action['start_element_description']}")
+                if not end_coords:
+                    print_to_chat(f"Could not find end element: {action['end_element_description']}")
+                return False
+        else:
+            # Handle traditional coordinate-based actions
+            coordinates_str = action.get('coordinates', '')
+            
+            if coordinates_str and action['act'] in {"move_to", "click", "double_click", "right_click", "hold_key_and_click", "drag"}:
+                try:
+                    # For drag action, parse both start and end coordinates
+                    if action['act'] == "drag" and " to " in coordinates_str:
+                        start_coords, end_coords = coordinates_str.split(" to ")
+                        start_x, start_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', start_coords)[0])
+                        end_x, end_y = map(float, re.findall(r'x=(\d+\.?\d*), y=(\d+\.?\d*)', end_coords)[0])
+                        x, y = start_x, start_y  # Store start position in x,y
+                        action['end_pos'] = (end_x, end_y)  # Store end position
+                    else:
+                        coordinates = {k.strip(): float(v.strip()) for k, v in 
+                                   (item.split('=') for item in coordinates_str.split(','))}
+                        x, y = coordinates['x'], coordinates['y']
+                except Exception as e:
+                    print_to_chat(f"Error parsing coordinates: {e}")
+                    return False
 
         def repeat_action(func):
             """Helper function to repeat an action multiple times."""
@@ -617,7 +742,6 @@ def execute_optimized_action(action_json):
             text_to_write = action['detail']
             def write_once():
                 try:
-                    import pyperclip
                     original_clipboard = pyperclip.paste()
                     try:
                         pyperclip.copy(text_to_write)
@@ -638,6 +762,18 @@ def execute_optimized_action(action_json):
                 print_to_chat(f"Could not find application: {action['detail']}")
                 return False
             return activate_window_title(app_title)
+
+        def handle_scroll_action():
+            """Handle scroll action - either direction-based or element-based."""
+            if action.get('scroll_method') == 'element':
+                # Element-based scrolling
+                element_desc = action.get('element_description', '')
+                scroll_dir = action.get('scroll_direction', 'down')
+                coords = scroll_until_element_visible(element_desc, scroll_dir)
+                return coords is not None
+            else:
+                # Traditional direction-based scrolling
+                return repeat_action(lambda: scroll(action['detail']))
 
         def perform_drag_action():
             """Perform drag action from start to end coordinates."""
@@ -672,10 +808,11 @@ def execute_optimized_action(action_json):
             "press_key": lambda: repeat_action(lambda: perform_simulated_keypress(action['detail'])),
             "hold_key_and_click": lambda: perform_mouse_action(x, y, "hold", repeat, hold_key=action['detail'].split(" and click ")[0]) if x is not None and y is not None else False,
             "text_entry": handle_text_entry,
-            "scroll": lambda: repeat_action(lambda: scroll(action['detail'])),
+            "scroll": lambda: handle_scroll_action(),
             "open_app": handle_open_app,
             "time_sleep": lambda: repeat_action(lambda: time.sleep(float(action['detail']))) if action['detail'].isdigit() else 1,
-            "execute_rpa_task": lambda: execute_rpa_task(action['detail'], repeat)
+            "execute_rpa_task": lambda: execute_rpa_task(action['detail'], repeat),
+            "assistant_task": lambda: handle_assistant_task(action['detail'], repeat)
         }
 
         if action['act'] in action_map:
@@ -744,8 +881,8 @@ def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1, hol
 def perform_simulated_keypress(press_key):
     """Simulate keyboard key press."""
     try:
-        # Remove periods and common words that aren't part of the key combination
-        press_key = press_key.replace('.', '').replace('Press ', '').strip()
+        # Remove the 'Press ' prefix
+        press_key = press_key.replace('Press ', '').strip()
         
         # Extract the key combination before any descriptive text after "to"
         if " to " in press_key:
@@ -847,14 +984,13 @@ def execute_rpa_task(task_name, repeat=1):
                     if is_stop_requested():
                         return False
                         
-                    success = execute_optimized_action(json.dumps({"action": [action]}))
+                    success = execute_action(json.dumps({"action": [action]}))
                     if not success:
                         print_to_chat(f"Failed to execute action in task {task_key}")
                         return False
                         
                     # Get delay from settings
-                    from assistant import load_settings
-                    settings = load_settings()
+                    settings = get_settings()
                     action_delay = settings.get("action_delay", 1.5)
                     time.sleep(action_delay)
                     
@@ -905,12 +1041,12 @@ def fast_act(single_step, app_name="", original_goal="", action_type="single", r
 def write_action(goal=None, press_enter=False, app_name="", original_goal=None, last_step=""):
     # Generate text content
     message_writer_agent = [{
-        "role": "user",
+        "role": "system",
         "content":  f"You're an AI Agent called Writer that processes the goal and only returns the final text goal.\n"
                     f"Process the goal with your own response as you are actually writing into a text box. Avoid jump lines."
                     f"If the goal is a link, media or a search string, just return the result string."
     }, {
-        "role": "system",
+        "role": "user",
         "content": f"Goal: {goal}"
     }]
     
@@ -929,7 +1065,6 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
 
     # Type the text
     try:
-        import pyperclip
         original_clipboard = pyperclip.paste()  # Save current clipboard
         try:
             pyperclip.copy(message_to_write)
@@ -947,9 +1082,536 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
     else:
         print_to_chat("AI no \"enter\" key press being made.")
 
-# Database functions
+def create_web_action_context(executed_actions, browser_info, webpage_info):
+    """Create context for web agent actions."""
+    # Format previous actions
+    previous_actions_formatted = []
+    i = 0
+    while i < len(executed_actions):
+        # Check if current item is a response message
+        if i < len(executed_actions) and executed_actions[i].startswith("RESPONSE_MESSAGE:"):
+            response_message = executed_actions[i][len("RESPONSE_MESSAGE:"):].strip()
+            
+            # Check if next item is an action
+            if i + 1 < len(executed_actions) and not executed_actions[i + 1].startswith("RESPONSE_MESSAGE:"):
+                action_detail = executed_actions[i + 1]
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Response Message: {response_message}\nAction: {action_detail}")
+                i += 2  # Skip both the message and action
+            else:
+                # If there's no corresponding action, just add the message
+                previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Response Message: {response_message}")
+                i += 1
+        else:
+            # If it's an action without a preceding message
+            previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Action: {executed_actions[i]}")
+            i += 1
+    
+    previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
+    
+    return (
+        f"You are an AI Agent that is capable of operating freely on browsers by generating web actions in sequence to accomplish the user's goal."
+        f"\nBased on the user's goal and the current webpage state:"
+        f"\n1. Determine if the goal has been achieved."
+        f"\n2. If the goal is not achieved (TASK_COMPLETED: No):"
+        f"\na. Generate a friendly response message telling the user what you're going to do in the same language that the user is using in the goal."
+        f"\n- Use only the pronoun 'I' to refer to yourself, and respond as if you performed all previous actions."
+        f"\n- If you want the user to provide additional details related to the action or if the action requires the user to do something manually by themselves, respond with PAUSE:<reasons>"
+        f"\n- If the task cannot be completed for some reasons or if you're not sure what to do next, respond with STOP:<reasons>. The sign to indicate that a task cannot be completed is you see the same action is performed too many times without achieving the goal.\n"
+        f"\nb. If you choose to continue and not to pause or stop, provide only ONE next action to continue achieving the goal."
+        f"\n\nRespond in the following format:"
+        f"\nTASK_COMPLETED: <Yes/No>"
+        f"\nRESPONSE_MESSAGE: <Your response>"
+        f"\nNEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action>"
+        f"\n\nJSON format for next action:"
+        f"\n```json"
+        f"\n{{"
+        f"\n    \"action\": ["
+        f"\n        {{"
+        f"\n            \"act\": \"<action_type>\","
+        f"\n            \"detail\": \"<action_description>\","
+        f"\n            \"selector\": \"<CSS/XPath_selector>\","
+        f"\n            \"wait\": <seconds_to_wait_after_the_action>"
+        f"\n        }}"
+        f"\n    ]"
+        f"\n}}"
+        f"\n```"
+        f"\n\nAvailable web action types:"
+        f"\n- navigate_to: Navigate to a URL specified in the detail field."
+        f"\n- click: Click on an element identified by the selector."
+        f"\n- input_text: Type text into an element identified by the selector. The text is provided in the detail field."
+        f"\n- select_option: Select an option from a dropdown list. The selector identifies the dropdown, and detail contains the option text."
+        f"\n- extract_text: Extract text from an element identified by the selector."
+        f"\n- scroll: Scroll the page. Detail should specify 'up', 'down', or a specific value like 'pixel:500'."
+        f"\n- open_tab: Open a new browser tab. If detail contains a URL, navigate to that URL in the new tab."
+        f"\n- switch_tab: Switch to a different browser tab. Detail should specify tab index or title fragment."
+        f"\n- submit_form: Submit a form. The selector should identify the form or submit button."
+        f"\n- execute_javascript: Execute a custom JavaScript code. The detail field should contain the JavaScript code to be executed."
+        f"\n- wait: Wait for specified seconds. The detail field should contain the number of seconds."
+        f"\n- wait_for_element: Wait for an element to be visible/available. The selector identifies the element."
+        f"\n\nImportant Rules:"
+        f"\n1. Always generate actions based on the current webpage state."
+        f"\n2. When specifying selectors in your actions, use the exact CSS selectors from the 'Available page elements' list in the webpage information."
+        f"\n3. Choose the most specific and reliable selector for each element (prefer IDs over classes when available)."
+        f"\n4. For input_text actions, ensure you're using a selector for an input element or textarea."
+        f"\n5. For click actions, ensure you're using a selector for a clickable element like a button, link, or element with a role of 'button'."
+        f"\n6. Wait for pages to load after navigation before performing actions."
+        f"\n7. Use JavaScript execution only when simpler actions won't work."
+        f"\nPrevious Actions:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}"
+        f"\n\nCurrent Browser Information:"
+        f"\n{browser_info}"
+        f"\n\nCurrent Webpage Information:"
+        f"\n{webpage_info}"
+    )
+
+def extract_page_selectors(browser_instance, max_elements=50):
+    """Extract robust selector information from a webpage for automation."""
+    try:
+        # Use JavaScript to extract element details and robust selectors
+        script = """
+        function getElementInfo() {
+            const elements = [];
+            const allElements = document.querySelectorAll('button, a, input, select, textarea, [role], [data-testid], [data-cy], [data-qa], .btn, form');
+            const maxElements = arguments[0] || 50;
+            const elementsToProcess = Array.from(allElements).slice(0, maxElements);
+            
+            function getXPath(el) {
+                if (!el || el.nodeType !== 1) return '';
+                if (el.id) return '//*[@id="' + el.id + '"]';
+                let parts = [];
+                while (el && el.nodeType === 1) {
+                    let nb = 0, idx = 0;
+                    let siblings = el.parentNode ? el.parentNode.childNodes : [];
+                    for (let i = 0; i < siblings.length; i++) {
+                        let sib = siblings[i];
+                        if (sib.nodeType === 1 && sib.tagName === el.tagName) {
+                            nb++;
+                            if (sib === el) idx = nb;
+                        }
+                    }
+                    let tagName = el.tagName.toLowerCase();
+                    let part = tagName + (nb > 1 ? '[' + idx + ']' : '');
+                    parts.unshift(part);
+                    el = el.parentNode;
+                }
+                return '/' + parts.join('/');
+            }
+
+            elementsToProcess.forEach((el, index) => {
+                const tagName = el.tagName.toLowerCase();
+                const id = el.id || '';
+                const classes = Array.from(el.classList).filter(Boolean);
+                const name = el.getAttribute('name') || '';
+                const type = el.getAttribute('type') || '';
+                const placeholder = el.getAttribute('placeholder') || '';
+                const value = el.getAttribute('value') || '';
+                const role = el.getAttribute('role') || '';
+                const dataTestId = el.getAttribute('data-testid') || '';
+                const dataCy = el.getAttribute('data-cy') || '';
+                const dataQa = el.getAttribute('data-qa') || '';
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                const text = el.textContent ? el.textContent.trim().substring(0, 80) : '';
+                // Build selector options
+                let selectors = [];
+                if (id) selectors.push(`#${id}`);
+                if (dataTestId) selectors.push(`[data-testid="${dataTestId}"]`);
+                if (dataCy) selectors.push(`[data-cy="${dataCy}"]`);
+                if (dataQa) selectors.push(`[data-qa="${dataQa}"]`);
+                if (ariaLabel) selectors.push(`[aria-label="${ariaLabel}"]`);
+                if (name) selectors.push(`${tagName}[name="${name}"]`);
+                if (role) selectors.push(`${tagName}[role="${role}"]`);
+                if (classes.length) selectors.push(`${tagName}.${classes.join('.')}`);
+                if (placeholder) selectors.push(`${tagName}[placeholder="${placeholder}"]`);
+                // XPath with text if text is short and unique enough
+                if (text && text.length < 80) selectors.push(`XPath: //${tagName}[contains(text(), "${text.split('"').join('\\"')}")]`);
+                // Fallback: XPath by structure
+                selectors.push(`XPath: ${getXPath(el)}`);
+                // Remove duplicates
+                selectors = Array.from(new Set(selectors));
+                // Check visibility
+                const rect = el.getBoundingClientRect();
+                const isVisible = rect.width > 0 && rect.height > 0 &&
+                    window.getComputedStyle(el).display !== 'none' &&
+                    window.getComputedStyle(el).visibility !== 'hidden';
+                // Collect all attributes
+                let attributes = {};
+                for (let attr of el.attributes) {
+                    attributes[attr.name] = attr.value;
+                }
+                elements.push({
+                    tagName,
+                    selectors,
+                    text,
+                    type,
+                    placeholder,
+                    isVisible,
+                    attributes
+                });
+            });
+            return elements;
+        }
+        return getElementInfo(arguments[0]);
+        """
+        elements = browser_instance.execute_script(script, max_elements)
+        # Format the results for AI prompt
+        formatted_elements = []
+        for i, el in enumerate(elements):
+            element_info = f"{i+1}. {el['tagName']}"
+            if el['text']:
+                element_info += f" | Text: \"{el['text']}\""
+            if el['type']:
+                element_info += f" | Type: {el['type']}"
+            if el['placeholder']:
+                element_info += f" | Placeholder: \"{el['placeholder']}\""
+            if not el['isVisible']:
+                element_info += " (Not visible)"
+            # List selectors in order of reliability
+            element_info += "\n    Selectors: " + ", ".join(el['selectors'])
+            # Show all attributes for reference
+            if el['attributes']:
+                attr_str = ", ".join(f"{k}='{v}'" for k, v in el['attributes'].items())
+                element_info += f"\n    Attributes: {attr_str}"
+            formatted_elements.append(element_info)
+        return "\n".join(formatted_elements)
+    except Exception as e:
+        return f"Error extracting page selectors: {str(e)}"
+
+def execute_web_action(action_json, sb_driver, delay=1.0):
+    """Execute a web action using SeleniumBase driver."""
+    try:
+        action_data = json.loads(action_json)
+        action = action_data['action'][0]
+        
+        act_type = action.get('act', '')
+        detail = action.get('detail', '')
+        selector = action.get('selector', '')
+        wait = float(action.get('wait', delay))        
+        
+        result = None
+        
+        # Execute action based on action type using SeleniumBase methods
+        if act_type == 'navigate_to':
+            sb_driver.open(detail)
+            
+        elif act_type == 'click':
+            sb_driver.click(selector)
+            
+        elif act_type == 'input_text':
+            sb_driver.type(selector, detail)
+            
+        elif act_type == 'select_option':
+            sb_driver.select_option_by_text(selector, detail)
+            
+        elif act_type == 'wait_for_element':
+            sb_driver.wait_for_element_visible(selector)
+            
+        elif act_type == 'extract_text':
+            text = sb_driver.get_text(selector)
+            result = text
+            
+        elif act_type == 'scroll':
+            if detail.lower() == 'down':
+                sb_driver.execute_script("window.scrollBy(0, 500);")
+            elif detail.lower() == 'up':
+                sb_driver.execute_script("window.scrollBy(0, -500);")
+            elif detail.lower().startswith('pixel:'):
+                pixels = int(detail[6:])
+                sb_driver.execute_script(f"window.scrollBy(0, {pixels});")
+            else:
+                # Scroll to element if detail is a selector
+                try:
+                    sb_driver.scroll_to(detail)
+                except:
+                    pass
+            
+        elif act_type == 'open_tab':
+            try:
+                # If detail contains a URL, open tab with that URL, otherwise just open a new tab
+                if detail and detail.startswith(('http://', 'https://')):
+                    sb_driver.open_new_tab(detail)
+                else:
+                    sb_driver.open_new_tab("about:blank")
+                
+            except Exception as e:
+                print_to_web_chat(f"Error opening new tab: {str(e)}")
+                return False, None
+            
+        elif act_type == 'switch_tab':
+            try:
+                if detail.isdigit():
+                    tab_index = int(detail)
+                    sb_driver.switch_to_window(tab_index)
+                else:
+                    # Try to match by title
+                    sb_driver.switch_to_window(detail)
+            except Exception as e:
+                print_to_web_chat(f"Error switching tab: {str(e)}")
+                pass
+            
+        elif act_type == 'submit_form':
+            # If selector points to a form
+            try:
+                sb_driver.submit(selector)
+            except:
+                # If selector points to a button
+                try:
+                    sb_driver.click(selector)
+                except Exception as e:
+                    print_to_web_chat(f"Error submitting form: {str(e)}")
+                    pass
+        
+        elif act_type == 'wait':
+            try:
+                seconds = float(detail)
+                sb_driver.sleep(seconds)
+            except Exception as e:
+                print_to_web_chat(f"Error in wait action: {str(e)}")
+                pass
+        
+        elif act_type == 'execute_javascript':
+            script_result = sb_driver.execute_script(detail)
+            if script_result:
+                result = str(script_result)
+        
+        else:
+            print_to_web_chat(f"WARNING: Unrecognized action '{action['act']}'.")
+            return False, None
+        
+        # Wait after action execution
+        sb_driver.sleep(wait)
+        return True, result
+        
+    except TimeoutException:
+        print_to_web_chat("Timeout waiting for element")
+        return False, None
+    except Exception as e:
+        print_to_web_chat(f"Error executing web action: {str(e)}")
+        return False, None
+
+def web_assistant(goal="", executed_actions=None, headless=False, use_vision=False):
+    """Main web assistant function for processing and executing web agent tasks using SeleniumBase."""
+    clear_stop()
+    
+    if not goal:
+        return "ERROR: No prompt provided. Please provide a prompt to the web assistant."
+    
+    print_to_web_chat(f"Web Task: {goal}")
+    
+    # Initialize
+    if executed_actions is None:
+        executed_actions = []
+    
+    # Get settings with defaults from the same source as main assistant
+    settings = get_settings()
+    max_attempts = settings.get("web_max_attempts", 20)
+    action_delay = settings.get("web_action_delay", 1.5)
+    
+    # Initialize or reuse browser instance
+    global _sb_instance, _driver
+    try:
+        # Check if the existing driver is still responsive
+        if _driver is not None:
+            try:
+                # A lightweight operation to check if the browser is still there
+                _driver.title # Accessing a property like title will fail if the browser is closed
+            except Exception as e: # Catches WebDriverException, NoSuchWindowException, etc.
+                print_to_web_chat("Browser session lost, re-initializing browser...")
+                if _sb_instance:
+                    try:
+                        _sb_instance.__exit__(None, None, None) # Attempt to clean up the old SB instance
+                    except Exception as e_exit:
+                        print_to_web_chat(f"Error during old SB instance cleanup: {e_exit}")
+                _sb_instance = None
+                _driver = None
+        
+        # Initialize browser if it's not already or if it was just reset
+        if _sb_instance is None:
+            print_to_web_chat("Initializing new browser session...")
+            # Create new SeleniumBase instance
+            _sb_instance = SB(browser="chrome", headless=headless, uc=True)
+            # Enter the context manager and store the driver
+            _driver = _sb_instance.__enter__()
+            # Maximize the browser window
+            _driver.maximize_window()
+        sb = _driver # Use the (potentially new) driver for the current task
+        
+        attempt = 0
+        
+        while attempt < max_attempts and not is_stop_requested():
+            # Get browser and webpage information using SeleniumBase driver
+            try:
+                current_url = sb.get_current_url()
+                page_title = sb.get_page_title()
+                
+                # Get basic page structure (using SeleniumBase's driver access)
+                page_source = sb.get_page_source()
+                
+                # Extract important elements (simplified for prompt context)
+                soup = BeautifulSoup(page_source, 'html.parser')
+                
+                # Gather forms, inputs, buttons, links
+                forms = len(soup.find_all('form'))
+                inputs = len(soup.find_all('input'))
+                buttons = len(soup.find_all('button'))
+                links = len(soup.find_all('a'))
+                
+                # Extract visible text (simplified)
+                body_text = soup.body.get_text(strip=True) if soup.body else ""
+                visible_text = body_text[:1000] + "..." if len(body_text) > 1000 else body_text
+                
+                # Extract detailed selector information using SeleniumBase driver
+                page_selectors = extract_page_selectors(sb.driver) # Pass the underlying driver
+                
+                # Prepare browser information
+                browser_info = f"Headless Mode: {headless}\nCurrent URL: {current_url}\nPage Title: {page_title}"
+                
+                # Prepare webpage information
+                webpage_info = (
+                    f"Page has {forms} forms, {inputs} input fields, {buttons} buttons, and {links} links.\n"
+                    f"Visible text excerpt:\n{visible_text}\n\n"
+                    f"Available page elements (selectors):\n{page_selectors}"
+                )
+                
+            except Exception as e:
+                browser_info = f"Headless Mode: {headless}\nError getting page info: {str(e)}"
+                webpage_info = "Unable to extract webpage information"
+            
+            # Create context for the web action
+            web_action_context = create_web_action_context(
+                executed_actions,
+                browser_info,
+                webpage_info
+            )
+            
+            # Format messages for api_call
+            messages = [
+                {"role": "system", "content": web_action_context},
+                {"role": "user", "content": goal}
+            ]
+            
+            if use_vision:
+                # Use imaging function to get visual analysis with the web_action_context
+                print_to_web_chat("Using vision AI to analyze the page...")
+                
+                # Create a complete context that includes the user's goal
+                vision_context = f"{web_action_context}\n\nUser Goal: {goal}"
+                
+                result = imaging(
+                    additional_context=vision_context,
+                    screenshot_size='Full screen',
+                    current_cursor_shape=get_cursor_shape()
+                )['choices'][0]['message']['content']
+            else:
+                # Use regular API call without visual input
+                result = api_call(
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=1500
+                )
+            
+            # Parse results
+            lines = result.strip().split('\n')
+            task_completed = False
+            next_action = None
+            response_message = None
+            
+            for line in lines:
+                if line.startswith('TASK_COMPLETED:'):
+                    task_completed = 'yes' in line.lower()
+                elif line.startswith('RESPONSE_MESSAGE:'):
+                    response_message = line[len('RESPONSE_MESSAGE:'):].strip()
+                    # Store in executed actions
+                    executed_actions.append(line.strip())
+                    
+                    if response_message.startswith('PAUSE:'):
+                        from utils import get_app_instance
+                        app = get_app_instance()
+                        if app:
+                            app.paused_execution = True
+                        request_stop()
+                    elif response_message.startswith('STOP:'):
+                        request_stop()
+                        
+                elif line.startswith('NEXT_ACTION:'):
+                    # Find JSON block
+                    json_start = result.find('```json', result.index('NEXT_ACTION:'))
+                    if json_start != -1:
+                        json_end = result.find('```', json_start + 7)
+                        if json_end != -1:
+                            next_action = result[json_start + 7:json_end].strip()
+                    else:
+                        # Alternative format without code block
+                        remaining_text = result[result.index('NEXT_ACTION:') + len('NEXT_ACTION:'):].strip()
+                        start_idx = remaining_text.find('{')
+                        end_idx = remaining_text.rfind('}') + 1
+                        if start_idx != -1 and end_idx != -1:
+                            next_action = remaining_text[start_idx:end_idx]
+            
+            if response_message:
+                # Display and speak the message
+                clean_message = response_message.replace('PAUSE:', '').replace('STOP:', '').strip()
+                print_to_web_chat(clean_message)
+                speaker(clean_message)
+            
+            if task_completed:
+                return "Task completed! Can I help you with something else?"
+            
+            if next_action and not is_stop_requested():
+                # Display the raw JSON action in the chat
+                print_to_web_chat(f"```json\n{next_action}\n```", False)
+                
+                success, result_data = execute_web_action(next_action, sb, action_delay) # Pass sb driver
+                
+                if not success:
+                    print_to_web_chat("Web action execution failed!")
+                    speaker("Web action execution failed")
+                    executed_actions.append("FAILED - Web action execution")
+                else:
+                    try:
+                        action_data = json.loads(next_action)
+                        action = action_data['action'][0]
+                        
+                        # Handle results from extract_text and execute_javascript actions
+                        if action['act'] in ['extract_text', 'execute_javascript'] and result_data:
+                            print_to_web_chat(f"Result: {result_data}")
+                            executed_actions.append(f"{action['act']}: {action.get('detail', '')} {action.get('selector', '')} -> Result: {result_data}")
+                        else:
+                            executed_actions.append(f"{action['act']}: {action.get('detail', '')} {action.get('selector', '')}")
+                            
+                    except Exception as e:
+                        print_to_web_chat(f"Error parsing action JSON: {str(e)}")
+                        executed_actions.append(str(next_action))
+            
+            attempt += 1
+        
+        if is_stop_requested():
+            return "Task execution stopped."
+        return "Task incomplete! Maximum number of actions reached."
+    except Exception as e:
+        print_to_web_chat(f"Error in web assistant: {str(e)}")
+        return f"Error in web assistant: {str(e)}"
+    finally:
+        # If there was an error creating the browser instance, ensure it's cleaned up
+        if _sb_instance is None:
+            close_browser()
+
+def close_browser():
+    """Close the browser instance when shutting down the application."""
+    global _sb_instance, _driver
+    if _sb_instance is not None:
+        try:
+            if _driver is not None:
+                # Don't call quit() as it will be handled by __exit__
+                pass
+            # Exit the context manager properly
+            _sb_instance.__exit__(None, None, None)
+        except Exception as e:
+            print_to_web_chat(f"Error closing browser: {str(e)}")
+        finally:
+            _sb_instance = None
+            _driver = None
+
 def create_database(database_file):
-    """Create the database and the required table."""
+    """Create SQLite database for storing task instructions."""
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
     cursor.execute('''
@@ -995,6 +1657,4 @@ create_database(database_file)
 
 # Example Usage
 if __name__ == "__main__":
-    assistant(assistant_goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge")
-
-
+    assistant(goal="Open Reddit, Youtube, TikTok, and Netflix on new windows by using the keyboard on each corner of the screen", app_name="Microsoft Edge")
