@@ -91,7 +91,6 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 git clone https://github.com/ngotrantronghieu/Computer-Autopilot.git
 
 # Change directory
-@echo off
 cd .\Computer-Autopilot\
 
 # Create and activate a virtual environment (recommended)
