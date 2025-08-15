@@ -7,6 +7,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 
 <img width="1252" height="914" alt="image" src="https://github.com/user-attachments/assets/8ae3e9c2-9dac-4a3a-ae00-ef50c941664b" />
 
+
 # Overview
 - Natural language control of your Windows Operating System
 - Modern GUI with chat interface and voice input capabilities
@@ -78,7 +79,6 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 
 
 # Installation
-
 ## Option 1: Download Release (Recommended)
 1. Visit the [Releases](https://github.com/ngotrantronghieu/Computer-Autopilot/releases) section
 2. Download the latest release
@@ -86,20 +86,28 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 4. Run `assistant.exe`
 
 ## Option 2: From Source
-```bash
-# Install requirements:
-cd Computer-Autopilot
+```batch
+# Clone the repository
+git clone https://github.com/ngotrantronghieu/Computer-Autopilot.git
+
+# Change directory
+@echo off
+cd .\Computer-Autopilot\
+
+# Create and activate a virtual environment (recommended)
+python -m venv venv
+venv\Scripts\activate
+
+# Install requirements
 pip install -r .\requirements.txt
 
-# Execute the assistant:
-cd .\core
-python ./assistant.py
+# Execute the assistant
+python .\core\assistant.py
 ```
 
 
-## Configuration:
-1. Visit https://docs.litellm.ai/docs/providers for LLM Model options
-2. Configure in app settings:
+## Configuration
+1. Configure in app settings:
    - LLM Model
    - LLM Vision Model
    - API Keys
@@ -108,7 +116,7 @@ python ./assistant.py
      - Maximum attempts
      - Web action delay
      - Web maximum attempts
-3. Optional: Use environment variables for API keys
+2. Optional: Use environment variables for API keys
 
 
 # Usage
@@ -160,5 +168,5 @@ python ./assistant.py
 
 # System Requirements
 - Windows Operating System
-- Python 3.x
+- Python 3.x+
 - Internet connection for LLM API access

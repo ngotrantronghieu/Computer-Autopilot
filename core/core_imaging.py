@@ -60,10 +60,19 @@ def analyze_image(base64_image, window_title, additional_context='What’s in th
         }
     ]
 
+    # Provider-specific kwargs based on model
+    try:
+        from core_api import get_provider_kwargs_for_model, current_vision_provider_options
+        provider_kwargs = get_provider_kwargs_for_model(current_vision_llm_model or "")
+        merged_kwargs = {**provider_kwargs, **current_vision_provider_options}
+    except Exception:
+        merged_kwargs = {}
+
     response = litellm.completion(
         model=current_vision_llm_model,
         messages=messages,
-        api_key=os.environ.get(current_vision_api_key_env_name)
+        api_key=os.environ.get(current_vision_api_key_env_name),
+        **merged_kwargs,
     )
     return response
 
