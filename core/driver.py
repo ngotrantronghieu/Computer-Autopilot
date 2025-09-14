@@ -14,6 +14,7 @@ import win32process
 from bs4 import BeautifulSoup
 from core_api import api_call
 from core_imaging import imaging
+from datetime import datetime
 from last_app import last_programs_list
 from mouse_detection import get_cursor_shape
 from pywinauto import Application
@@ -25,7 +26,6 @@ from utils import print_to_chat, print_to_web_chat
 from voice import speaker
 from window_elements import analyze_app
 from window_focus import activate_window_title, get_installed_apps_registry
-from datetime import datetime
 warnings.simplefilter("ignore", UserWarning)
 if os.name == 'nt':  # Windows only
     from subprocess import CREATE_NO_WINDOW
@@ -59,7 +59,6 @@ def get_settings():
 #             "You are an AI assistant that receives a message from the user and responds with the best role related to the message.\n"
 #             "You can choose between the following roles and decide what fits the best:\n"
 #             "windows_assistant - An assistant that can perform Windows application driver testcases to achieve a goal. It can handle online data, play, pause, stream media or operate the whole computer.\n"
-
 #             "joyful_conversation - Use this role if the user isn't looking for performing anything on Windows.\n"
 #             "Only respond with the name of the role to use. Modify your response to match the message subject.\n"
 #             "If the message seems to be related to Windows, like opening an application, searching, browsing, media, or social networks, choose windows_assistant.\n"

@@ -1877,7 +1877,6 @@ class ModernChatInterface(QMainWindow):
                     conv_context = self.build_conversation_context(max_messages=20, max_chars=6000)
                     addl = self.additional_context if self.additional_context else ""
                     combined_context = conv_context if not addl else f"{conv_context}\n\nAdditional Context: {addl}"
-                    print_to_chat(f"Combined context: {combined_context}")
                     result = assistant(
                         goal=message,
                         executed_actions=self.paused_actions,
