@@ -25,6 +25,7 @@ from utils import print_to_chat, print_to_web_chat
 from voice import speaker
 from window_elements import analyze_app
 from window_focus import activate_window_title, get_installed_apps_registry
+from datetime import datetime
 warnings.simplefilter("ignore", UserWarning)
 if os.name == 'nt':  # Windows only
     from subprocess import CREATE_NO_WINDOW
@@ -51,26 +52,27 @@ def get_settings():
     from assistant import load_settings
     return load_settings()
 
-def auto_role(message):
-    assistant_call = [{
-        "role": "system",
-        "content": (
-            "You are an AI assistant that receives a message from the user and responds with the best role related to the message.\n"
-            "You can choose between the following roles and decide what fits the best:\n"
-            "windows_assistant - An assistant that can perform Windows application driver testcases to achieve a goal. It can handle online data, play, pause, stream media or operate the whole computer.\n"
-            "joyful_conversation - Use this role if the user isn't looking for performing anything on Windows.\n"
-            "Only respond with the name of the role to use. Modify your response to match the message subject.\n"
-            "If the message seems to be related to Windows, like opening an application, searching, browsing, media, or social networks, choose windows_assistant.\n"
-            "If the message seems to be related with generating or writing content, choose windows_assistant.\n"
-            "If the message seems that the user is trying to do something with content, choose windows_assistant.\n"
-            "Otherwise, if the user is just asking question or having conversation, choose joyful_conversation."
-        )
-    }, {
-        "role": "user",
-        "content": f"Message: {message}"
-    }]
-    
-    return api_call(assistant_call, max_tokens=50)
+# def auto_role(message):
+#     assistant_call = [{
+#         "role": "system",
+#         "content": (
+#             "You are an AI assistant that receives a message from the user and responds with the best role related to the message.\n"
+#             "You can choose between the following roles and decide what fits the best:\n"
+#             "windows_assistant - An assistant that can perform Windows application driver testcases to achieve a goal. It can handle online data, play, pause, stream media or operate the whole computer.\n"
+
+#             "joyful_conversation - Use this role if the user isn't looking for performing anything on Windows.\n"
+#             "Only respond with the name of the role to use. Modify your response to match the message subject.\n"
+#             "If the message seems to be related to Windows, like opening an application, searching, browsing, media, or social networks, choose windows_assistant.\n"
+#             "If the message seems to be related with generating or writing content, choose windows_assistant.\n"
+#             "If the message seems that the user is trying to do something with content, choose windows_assistant.\n"
+#             "Otherwise, if the user is just asking question or having conversation, choose joyful_conversation."
+#         )
+#     }, {
+#         "role": "user",
+#         "content": f"Message: {message}"
+#     }]
+
+#     return api_call(assistant_call, max_tokens=50)
 
 def app_space_map(map='', app_space_filepath="app_space_map.json"):
     """Get application space mapping for context and shortcuts."""
@@ -101,7 +103,7 @@ def app_space_map(map='', app_space_filepath="app_space_map.json"):
                 else:
                     app_info = convert_to_string(element_data)
                 element_map.append(f"{app_key}:\n{app_info}")
-        
+
         full_map = "\n\n".join(element_map)
         # print_to_chat(f"App space map:\n{full_map}\n")
         return full_map
@@ -110,7 +112,7 @@ def app_space_map(map='', app_space_filepath="app_space_map.json"):
             shortcuts_map = []
             for app_key, shortcut_data in app_space_data["keyboard_shortcuts"].items():
                 shortcuts_map.append(f"{app_key}:\n{convert_to_string(shortcut_data)}")
-            
+
             full_shortcuts = "\n\n".join(shortcuts_map)
             # print_to_chat(f"App space map:\n{full_shortcuts}\n")
             return full_shortcuts
@@ -140,27 +142,27 @@ def get_installed_apps_ms_store():
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         Get-StartApps | ForEach-Object { $_.Name }
         """
-        
+
         # Set up startupinfo to hide the console window
         startupinfo = None
         if os.name == 'nt':  # Windows
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0  # SW_HIDE
-            
+
         # Run the command with hidden console and UTF-8 encoding
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", powershell_command], 
+            ["powershell", "-NoProfile", "-Command", powershell_command],
             capture_output=True,
             encoding='utf-8',
             errors='replace',
             startupinfo=startupinfo,
             creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
-        
+
         # Get the app names, filter out empty lines, and wrap each name in single quotes
         app_names = [f"'{line.strip()}'" for line in result.stdout.strip().split('\n') if line.strip()]
-        
+
         return ", ".join(app_names)
     except Exception as e:
         print_to_chat(f"Error getting installed apps from Microsoft Store: {e}")
@@ -170,10 +172,10 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
     """Get the most appropriate application title for the given goal."""
     if actual_step:
         print_to_chat(f"Getting the application name from the actual step: {actual_step}")
-        
+
     installed_apps_registry = get_installed_apps_registry()
     installed_apps_ms_store = get_installed_apps_ms_store()
-        
+
     goal_app = [{
         "role": "system",
         "content":  f"You are an AI Assistant called App Selector that receives a list of programs and responds only with the most suitable program to achieve the goal.\n"
@@ -188,15 +190,15 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
     }]
 
     app_name = api_call(goal_app, max_tokens=100)
-    
+
     if "NO_APP" in app_name:
         print_to_chat("No suitable application found.")
         return None
-    
+
     filtered_matches = re.findall(r'["\'](.*?)["\']', app_name)
     if filtered_matches and filtered_matches[0]:
         app_name = filtered_matches[0]
-    
+
     if app_name.lower().endswith('.exe'):
         app_name = app_name[:-4]
 
@@ -209,7 +211,7 @@ def get_application_title(goal="", last_step=None, actual_step=None, focus_windo
     elif "sorry" in app_name.lower():
         print_to_chat("Unable to determine application.")
         return None
-        
+
     return app_name
 
 def get_focused_window_details():
@@ -236,14 +238,14 @@ def get_available_rpa_tasks():
         if isinstance(data, dict):
             desc = data.get('description', 'No description')
             actions = data.get('actions', [])
-            
+
             # Format actions list
             action_details = []
             for i, action in enumerate(actions, 1):
                 act_type = action.get('act', '')
                 act_detail = action.get('detail', '')
                 action_details.append(f"  {i}. {act_type}: {act_detail}")
-            
+
             # Build task info string
             task_info = [
                 f"Task: {name}",
@@ -260,7 +262,7 @@ def get_available_rpa_tasks():
                 act_type = action.get('act', '')
                 act_detail = action.get('detail', '')
                 action_details.append(f"  {i}. {act_type}: {act_detail}")
-                
+
             task_info = [
                 f"Task: {name}",
                 "Description: No description",
@@ -268,7 +270,7 @@ def get_available_rpa_tasks():
             ]
             task_info.extend(action_details)
             task_list.append("\n".join(task_info))
-            
+
     return "\n\n".join(task_list)
 
 def create_action_context(goal, executed_actions, app_context, keyboard_shortcuts, rpa_context, screen_info, current_cursor_shape, installed_apps_registry, installed_apps_ms_store):
@@ -280,7 +282,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         # Check if current item is a response message
         if i < len(executed_actions) and executed_actions[i].startswith("RESPONSE_MESSAGE:"):
             response_message = executed_actions[i][len("RESPONSE_MESSAGE:"):].strip()
-            
+
             # Check if next item is an action
             if i + 1 < len(executed_actions) and not executed_actions[i + 1].startswith("RESPONSE_MESSAGE:"):
                 action_detail = executed_actions[i + 1]
@@ -294,9 +296,9 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
             # If it's an action without a preceding message
             previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Action: {executed_actions[i]}")
             i += 1
-    
+
     previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
-    
+
     # Get cursor information
     cursor_x, cursor_y = pyautogui.position()
     cursor_info = f"Current Cursor Position: x={cursor_x}, y={cursor_y}\nCurrent Cursor Shape: {current_cursor_shape}"
@@ -331,11 +333,12 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"b. If you choose to continue and not to pause or stop, provide only ONE next action to continue achieving the goal:\n"
         f"- For any action, provide an action description explaining the exact details related to that action.\n"
         f"- For any mouse action, provide the coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts. For other actions, don't include the coordinates in the JSON.\n"
-        f"- Specify the number of repeats needed for action that requires multiple repeats. If not specified, the action will be performed only once.\n\n"
+        f"- Specify the number of repeats needed for action that requires multiple repeats. If not specified, the action will be performed only once.\n"
+        f"3. Special case: If the goal is a general informational request that does not require performing any actions on Windows/apps, respond to the request directly (you may use the current screen information and UI analysis below as helpful context). In this case, set TASK_COMPLETED: Yes and ONLY provide the RESPONSE_MESSAGE. DO NOT include NEXT_ACTION in your response.\n\n"
         f"Respond in the following format:\n"
         f"TASK_COMPLETED: <Yes/No>\n"
         f"RESPONSE_MESSAGE: <A friendly response message related to what you're doing>\n"
-        f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action>\n\n"
+        f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action> (omit this field entirely when the goal is a general request and no action is required)\n\n"
         f"JSON format for next action:\n"
         f"{{\n"
         f"    \"action\": [\n"
@@ -359,7 +362,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- scroll: The direction to scroll <up, down, left, right>. (Each scroll action will scroll the screen for 850 pixels in the specified direction).\n"
         f"- open_app: The name of the application to open or focus on.\n"
         f"- time_sleep: The duration to wait for in seconds.\n"
-        f"- execute_rpa_task: The name of the RPA task to execute. (Use this action to execute a saved RPA task).\n"
+        f"- execute_rpa_task: The name of the RPA task to execute. (Use this action to execute a saved RPA task created by the user. Only use this action if the user asks you to do so.)\n"
         f"{rpa_context}\n\n"
         f"Important Rules:\n"
         f"1. In the action description, provide ONLY the exact information related to each action type specified above without any additional text.\n"
@@ -369,8 +372,7 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"4. If the last action is a mouse action and you see that it didn't perform correctly, you can also try again with the same mouse action but try to modify the previous coordinates to improve the accuracy.\n"
         f"5. If the goal requires interacting with an application, always provide an open_app action to open and focus on that application before performing any other actions on that application.\n"
         f"6. Before providing any text_entry action on an input area, make sure a click action or a press_key action that leads to focus on the required input area is performed beforehand.\n"
-        f"7. Always prioritize using a press_key action if it can replace a mouse action that results in the same outcome.\n"
-        f"8. Prioritize generating execute_rpa_task action to achieve the goal more efficiently if available.\n\n"
+        f"7. Always prioritize using a press_key action if it can replace a mouse action that results in the same outcome.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
         f"Previous actions you've performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
         f"Additional contexts:\n"
@@ -391,7 +393,7 @@ def parse_assistant_result(result):
     task_completed = False
     next_action = None
     response_message = None
-    
+
     try:
         # First, check if the last action was a desktop-focusing command
         is_desktop_focus = False
@@ -403,13 +405,13 @@ def parse_assistant_result(result):
                 action_json = remaining_text[start_idx:end_idx]
                 action_data = json.loads(action_json)
                 action = action_data['action'][0]
-                if (action['act'] == 'press_key' and 
-                    ('windows + d' in action['detail'].lower() or 
+                if (action['act'] == 'press_key' and
+                    ('windows + d' in action['detail'].lower() or
                      'win + d' in action['detail'].lower())):
                     is_desktop_focus = True
         except:
             pass
-            
+
         for line in lines:
             if line.startswith('TASK_COMPLETED:'):
                 task_completed = 'yes' in line.lower()
@@ -430,22 +432,22 @@ def parse_assistant_result(result):
                 if start_idx != -1 and end_idx != -1:
                     next_action = remaining_text[start_idx:end_idx]
                 break
-                
+
         if response_message:
             print_to_chat(response_message)
             # Pass the is_desktop_focus flag to the speaker function
-            speaker(response_message.replace('PAUSE:', '').replace('STOP:', '').strip(), 
+            speaker(response_message.replace('PAUSE:', '').replace('STOP:', '').strip(),
                    skip_focus=is_desktop_focus)
-            
+
     except Exception as e:
         print_to_chat(f"Error parsing assistant result: {e}")
-        
+
     return task_completed, next_action
 
 def assistant(goal="", executed_actions=None, additional_context=None, resumed=False, called_from=None):
     """Main assistant function for processing and executing user goals."""
     clear_stop()
-    
+
     if not goal:
         speaker("ERROR: No prompt provided. Please provide a prompt to the assistant.")
         time.sleep(10)
@@ -454,14 +456,14 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
         original_goal = goal
         if additional_context:
             original_goal = f"{original_goal}. {additional_context}"
-        print_to_chat(f"Prompt: {original_goal}")
+        # print_to_chat(f"Prompt: {original_goal}")
 
-        if called_from == "assistant":
-            print_to_chat(f"Called from: {called_from}")
-        elif not resumed:
-            speaker(f"I'm analyzing your request:", additional_text=f"\"{original_goal}\"")
-        else:
-            speaker("Resuming task execution.")
+        # if called_from == "assistant":
+        #     print_to_chat(f"Called from: {called_from}")
+        # elif not resumed:
+        #     speaker(f"I'm analyzing your request:", additional_text=f"\"{original_goal}\"")
+        # else:
+        #     speaker("Resuming task execution.")
 
     app_context = app_space_map(map='app_space')
     keyboard_shortcuts = app_space_map()
@@ -477,7 +479,7 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
     # Get installed applications
     installed_apps_registry = get_installed_apps_registry()
     installed_apps_ms_store = get_installed_apps_ms_store()
-    
+
     # Get settings with defaults
     settings = get_settings()
     max_attempts = settings.get("max_attempts", 20)
@@ -485,7 +487,7 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
 
     attempt = 0
     executed_actions = executed_actions or []
-    
+
     while attempt < max_attempts:
         # Check for stop request before generating next action
         if is_stop_requested():
@@ -496,9 +498,9 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
                 app.paused_actions = executed_actions
                 return "Task paused: Waiting for resume"
             return "Task incomplete: Execution stopped by user"
-            
+
         current_cursor_shape = get_cursor_shape()
-        
+
         action_context = create_action_context(
             original_goal,
             executed_actions,
@@ -510,7 +512,7 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
             installed_apps_registry,
             installed_apps_ms_store
         )
-        
+
         action_key = f"{original_goal}_{attempt}"
         if action_key not in action_cache:
             result = imaging(
@@ -521,9 +523,9 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
             action_cache[action_key] = result
         else:
             result = action_cache[action_key]
-            
+
         task_completed, next_action = parse_assistant_result(result)
-        
+
         # Store the response message in executed_actions
         try:
             lines = result.strip().split('\n')
@@ -533,15 +535,15 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
                     break
         except Exception as e:
             print_to_chat(f"Error storing response message: {e}")
-        
+
         if task_completed:
-            return "Task completed! Can I help you with something else?"
-        
+            return
+
         print_to_chat(f"Next action: {next_action}")
 
         if next_action:
             success = execute_action(next_action)
-            
+
             if not success:
                 print_to_chat("Action execution failed!")
                 speaker("Action execution failed")
@@ -552,7 +554,7 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
                 except Exception as e:
                     executed_actions.append(f"FAILED - {str(next_action)}")
                 return "Task incomplete: Action execution failed"
-            
+
             try:
                 action_data = json.loads(next_action)
                 action = action_data['action'][0]
@@ -561,11 +563,11 @@ def assistant(goal="", executed_actions=None, additional_context=None, resumed=F
             except Exception as e:
                 print_to_chat(f"Error parsing action JSON: {str(e)}")
                 executed_actions.append(str(next_action))
-            
+
             time.sleep(action_delay)
-            
+
         attempt += 1
-    
+
     return "Task incomplete! Task execution aborted!"
 
 def identify_element_coordinates(element_description):
@@ -573,30 +575,48 @@ def identify_element_coordinates(element_description):
     try:
         # Get screen resolution
         screen_width, screen_height = pyautogui.size()
-        
+
+        # Get focused window details
+        focused_details = get_focused_window_details()
+        if focused_details:
+            window_title, _, _, process_name, window_pos, window_size = focused_details
+            focused_window_info = (
+                f"Focused window details:\n"
+                f"Title: {window_title}\n"
+                f"Process: {process_name}\n"
+                f"Position: {window_pos}\n"
+                f"Size: {window_size}"
+            )
+            ui_analysis = analyze_app(window_title)
+            ui_elements = f"UIAutomation UI Elements Analysis:\n{ui_analysis}" if ui_analysis else ""
+        else:
+            focused_window_info = "Focused Window Details: There are no details about the focused window."
+
         # Prepare prompt for element identification
         prompt = f"""
-        You are an AI assistant that helps identify UI elements on screen. 
+        You are an AI assistant that helps identify UI elements on screen.
         I need to find the coordinates of a specific element.
 
         Screen Resolution: {screen_width}x{screen_height}
+        {focused_window_info}
+        {ui_elements}
         Element description: {element_description}
 
-        Look at the current screen and identify the exact pixel coordinates (x, y) of the center of the described element.
+        Based on the current screen and the ui elements analysis, identify the exact pixel coordinates (x, y) of the center of the described element.
 
         IMPORTANT: You must return ONLY the coordinates in the exact format: x=123, y=456
         Do not include any other text, explanations, or formatting.
 
         If the element is not found or not clearly visible, return: NOT_FOUND
         """
-        
+
         # Call the assistant to analyze the screenshot and find the element
         response = imaging(additional_context=prompt, screenshot_size='Full screen')['choices'][0]['message']['content']
-        
+
         # Parse the response to extract coordinates
         if "NOT_FOUND" in response:
             return None
-            
+
         # Extract coordinates from response
         import re
         coord_match = re.search(r'x=(\d+),\s*y=(\d+)', response)
@@ -607,7 +627,7 @@ def identify_element_coordinates(element_description):
         else:
             print_to_chat(f"Could not parse coordinates from response: {response}")
             return None
-            
+
     except Exception as e:
         print_to_chat(f"Error identifying element coordinates: {e}")
         return None
@@ -617,21 +637,21 @@ def scroll_until_element_visible(element_description, scroll_direction="down", m
     try:
         for attempt in range(max_attempts):
             print_to_chat(f"Searching for element (attempt {attempt + 1}/{max_attempts}): {element_description}")
-            
+
             # Try to find the element
             coords = identify_element_coordinates(element_description)
             if coords:
                 print_to_chat(f"Element found at coordinates: {coords}")
                 return coords
-            
+
             # Element not found, scroll and try again
             print_to_chat(f"Element not found, scrolling {scroll_direction}...")
             scroll(scroll_direction)
             time.sleep(1)  # Wait for scroll to complete
-        
+
         print_to_chat(f"Element '{element_description}' not found after {max_attempts} scroll attempts")
         return None
-        
+
     except Exception as e:
         print_to_chat(f"Error in scroll until element visible: {e}")
         return None
@@ -641,13 +661,13 @@ def handle_assistant_task(task_description, repeat=1):
     try:
         for i in range(repeat):
             print_to_chat(f"Executing assistant task (attempt {i+1}/{repeat}): {task_description}")
-            
+
             # Call the main assistant function with the task description
             assistant(goal=task_description, called_from="rpa_action")
-            
+
             if repeat > 1 and i < repeat - 1:
                 time.sleep(1)  # Small delay between repetitions
-                
+
         return True
     except Exception as e:
         print_to_chat(f"Error executing assistant task: {e}")
@@ -662,22 +682,22 @@ def execute_action(action_json):
             end_idx = action_json.rfind('}') + 1
             if start_idx != -1 and end_idx != -1:
                 action_json = action_json[start_idx:end_idx]
-        
+
         instructions = json.loads(action_json)
         action = instructions.get('action', [{}])[0]
-        
+
         if 'act' not in action or 'detail' not in action:
             raise ValueError("Invalid action format: missing 'act' or 'detail'")
-        
+
         # Handle null/None repeat values
         try:
             repeat = max(1, int(action.get('repeat', 1)))
         except (ValueError, TypeError):
             repeat = 1
-        
+
         # Handle coordinates or element identification
         x = y = None
-        
+
         # Check if this is an element-based action
         if action.get('method') == 'element' and 'element_description' in action:
             # Use LLM to identify element coordinates
@@ -692,7 +712,7 @@ def execute_action(action_json):
             # Handle element-based drag
             start_coords = identify_element_coordinates(action['start_element_description'])
             end_coords = identify_element_coordinates(action['end_element_description'])
-            
+
             if start_coords and end_coords:
                 x, y = start_coords
                 action['end_pos'] = end_coords
@@ -707,7 +727,7 @@ def execute_action(action_json):
         else:
             # Handle traditional coordinate-based actions
             coordinates_str = action.get('coordinates', '')
-            
+
             if coordinates_str and action['act'] in {"move_to", "click", "double_click", "right_click", "hold_key_and_click", "drag"}:
                 try:
                     # For drag action, parse both start and end coordinates
@@ -718,7 +738,7 @@ def execute_action(action_json):
                         x, y = start_x, start_y  # Store start position in x,y
                         action['end_pos'] = (end_x, end_y)  # Store end position
                     else:
-                        coordinates = {k.strip(): float(v.strip()) for k, v in 
+                        coordinates = {k.strip(): float(v.strip()) for k, v in
                                    (item.split('=') for item in coordinates_str.split(','))}
                         x, y = coordinates['x'], coordinates['y']
                 except Exception as e:
@@ -755,7 +775,7 @@ def execute_action(action_json):
                     return False
 
             return repeat_action(write_once)
-        
+
         def handle_open_app():
             app_title = get_application_title(action['detail'])
             if app_title is None:
@@ -781,16 +801,16 @@ def execute_action(action_json):
                 # Move to start position
                 move_mouse(x, y)
                 time.sleep(0.2)  # Small delay before clicking
-                
+
                 # Press and hold mouse button
                 pyautogui.mouseDown()
                 time.sleep(0.2)  # Small delay before dragging
-                
+
                 # Drag to end position
                 end_x, end_y = action['end_pos']
                 move_mouse(end_x, end_y, duration=1.0)  # Slower movement for drag
                 time.sleep(0.2)  # Small delay before release
-                
+
                 # Release mouse button
                 pyautogui.mouseUp()
                 return True
@@ -828,7 +848,7 @@ def execute_action(action_json):
         else:
             print_to_chat(f"WARNING: Unrecognized action '{action['act']}'.")
             return False
-        
+
     except Exception as e:
         print_to_chat(f"Error executing action: {str(e)}")
         return False
@@ -840,7 +860,7 @@ def move_mouse(x, y, duration=0.5, ease_function=pyautogui.easeOutQuad):
 def click_mouse(click_type="single", repeat=1, interval=0.1):
     """Perform mouse clicks with specified type and repeat count."""
     current_x, current_y = pyautogui.position()
-    
+
     for _ in range(repeat):
         if click_type == "single":
             pyautogui.click(current_x, current_y)
@@ -848,14 +868,14 @@ def click_mouse(click_type="single", repeat=1, interval=0.1):
             pyautogui.doubleClick(current_x, current_y)
         elif click_type == "right":
             pyautogui.rightClick(current_x, current_y)
-            
+
         if repeat > 1:
             time.sleep(interval)
 
 def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1, hold_key=None):
     """Combined function to move mouse and perform click actions."""
     move_mouse(x, y)
-    
+
     if hold_key and action_type == "hold":
         # Map the key if needed
         key_mapping = {
@@ -866,7 +886,7 @@ def perform_mouse_action(x, y, action_type="single", repeat=1, interval=0.1, hol
             'spacebar': 'space',
         }
         key = key_mapping.get(hold_key.lower(), hold_key.lower())
-        
+
         # Hold the key, perform click, then release
         try:
             pyautogui.keyDown(key)
@@ -883,11 +903,11 @@ def perform_simulated_keypress(press_key):
     try:
         # Remove the 'Press ' prefix
         press_key = press_key.replace('Press ', '').strip()
-        
+
         # Extract the key combination before any descriptive text after "to"
         if " to " in press_key:
             press_key = press_key.split(" to ")[0].strip()
-            
+
         # Define common key mappings
         key_mapping = {
             'win': 'winleft',
@@ -900,25 +920,25 @@ def perform_simulated_keypress(press_key):
             'arrowleft': 'left',
             'arrowright': 'right',
         }
-        
+
         # Split the key combination
         keys = [k.strip().lower() for k in press_key.split('+')]
-        
+
         # Map the keys to their pyautogui equivalents
         pyautogui_keys = [key_mapping.get(k.strip(), k.strip()) for k in keys]
-        
+
         # Press all keys in sequence
         for key in pyautogui_keys:
             pyautogui.keyDown(key)
-        
+
         time.sleep(0.2)  # Increased delay to ensure keys are registered
-        
+
         # Release keys in reverse order
         for key in reversed(pyautogui_keys):
             pyautogui.keyUp(key)
-            
+
         return True
-        
+
     except Exception as e:
         print_to_chat(f"Error performing key press: {str(e)}")
         return False
@@ -926,7 +946,7 @@ def perform_simulated_keypress(press_key):
 def scroll(target):
     # Parse scroll direction from target element description
     scroll_amount = 850  # Base scroll amount
-    
+
     if any(term in target.lower() for term in ['up', 'top']):
         scroll_direction = 1  # Positive for up
     elif any(term in target.lower() for term in ['down', 'bottom']):
@@ -939,7 +959,7 @@ def scroll(target):
         pyautogui.hscroll = True
     else:
         scroll_direction = -1  # Default to scroll down
-            
+
     # Perform scroll action
     if hasattr(pyautogui, 'hscroll') and pyautogui.hscroll:
         pyautogui.hscroll(scroll_amount * scroll_direction)
@@ -953,49 +973,49 @@ def execute_rpa_task(task_name, repeat=1):
     try:
         # Load all available tasks
         tasks = load_tasks()
-        
+
         # Look for any task names in the action description that match our task keys
         found_tasks = []
         for task_key in tasks.keys():
             if task_key in task_name:
                 found_tasks.append(task_key)
-                
+
         if not found_tasks:
             print_to_chat(f"No known task names found in: {task_name}")
             return False
-            
+
         # Execute each found task
         for task_key in found_tasks:
             print_to_chat(f"Executing task: {task_key}")
             task_data = tasks[task_key]
-            
+
             if isinstance(task_data, dict):
                 actions = task_data.get('actions', [])
             else:
                 # Handle legacy format
                 actions = task_data
-                
+
             if not actions:
                 print_to_chat(f"No actions found for task: {task_key}")
                 continue
-                
+
             for _ in range(repeat):
                 for action in actions:
                     if is_stop_requested():
                         return False
-                        
+
                     success = execute_action(json.dumps({"action": [action]}))
                     if not success:
                         print_to_chat(f"Failed to execute action in task {task_key}")
                         return False
-                        
+
                     # Get delay from settings
                     settings = get_settings()
                     action_delay = settings.get("action_delay", 1.5)
                     time.sleep(action_delay)
-                    
+
         return True
-        
+
     except Exception as e:
         print_to_chat(f"Error executing RPA task: {str(e)}")
         return False
@@ -1012,28 +1032,28 @@ def fast_act(single_step, app_name="", original_goal="", action_type="single", r
         f"You are an AI Windows Mouse Agent. Based on the screenshot of {app_name}, find the coordinates of: {single_step}\n"
         f"Only respond with the coordinates in this exact format: \"x=<value>, y=<value>\""
     )
-    
+
     # Get coordinates from screenshot
     result = imaging(
         window_title=app_name,
         additional_context=coordinate_context,
         screenshot_size='Full screen'
     )['choices'][0]['message']['content']
-    
+
     try:
         # Parse coordinates
-        coordinates = {k.strip(): float(v.strip()) for k, v in 
+        coordinates = {k.strip(): float(v.strip()) for k, v in
                       (item.split('=') for item in result.split(','))}
         x, y = coordinates['x'], coordinates['y']
-        
+
         # Perform mouse action
         if action_type == "move":
             move_mouse(x, y)
         else:
             perform_mouse_action(x, y, action_type, repeat)
-            
+
         return result
-        
+
     except Exception as e:
         print_to_chat(f"Error performing fast action: {e}")
         return None
@@ -1049,9 +1069,9 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
         "role": "user",
         "content": f"Goal: {goal}"
     }]
-    
+
     message_to_write = api_call(message_writer_agent, max_tokens=1000)
-    
+
     # Handle click actions if needed
     if any(click_term in goal.lower() for click_term in ["click on", "click the", "click"]):
         print_to_chat("Found to click on the goal.")
@@ -1074,7 +1094,7 @@ def write_action(goal=None, press_enter=False, app_name="", original_goal=None, 
             pyperclip.copy(original_clipboard)
     except Exception as e:
         print_to_chat(f"Error writing text: {str(e)}")
-    
+
     # Handle enter key press if needed
     if any(enter_term in goal.lower() for enter_term in ["press enter", "press the enter", "'enter'", '"enter"']) or press_enter:
         print_to_chat("Found to press the enter key in the goal.")
@@ -1091,7 +1111,7 @@ def create_web_action_context(executed_actions, browser_info, webpage_info):
         # Check if current item is a response message
         if i < len(executed_actions) and executed_actions[i].startswith("RESPONSE_MESSAGE:"):
             response_message = executed_actions[i][len("RESPONSE_MESSAGE:"):].strip()
-            
+
             # Check if next item is an action
             if i + 1 < len(executed_actions) and not executed_actions[i + 1].startswith("RESPONSE_MESSAGE:"):
                 action_detail = executed_actions[i + 1]
@@ -1105,11 +1125,11 @@ def create_web_action_context(executed_actions, browser_info, webpage_info):
             # If it's an action without a preceding message
             previous_actions_formatted.append(f"{len(previous_actions_formatted) + 1}. Action: {executed_actions[i]}")
             i += 1
-    
+
     previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
-    
+
     return (
-        f"You are an AI Agent that is capable of operating freely on browsers by generating web actions in sequence to accomplish the user's goal."
+        f"You are an AI Agent that is capable of operating freely on browser by generating web actions in sequence to accomplish the user's goal."
         f"\nBased on the user's goal and the current webpage state:"
         f"\n1. Determine if the goal has been achieved."
         f"\n2. If the goal is not achieved (TASK_COMPLETED: No):"
@@ -1118,10 +1138,11 @@ def create_web_action_context(executed_actions, browser_info, webpage_info):
         f"\n- If you want the user to provide additional details related to the action or if the action requires the user to do something manually by themselves, respond with PAUSE:<reasons>"
         f"\n- If the task cannot be completed for some reasons or if you're not sure what to do next, respond with STOP:<reasons>. The sign to indicate that a task cannot be completed is you see the same action is performed too many times without achieving the goal.\n"
         f"\nb. If you choose to continue and not to pause or stop, provide only ONE next action to continue achieving the goal."
+        f"\n3. Special case: If the goal is a general informational request that does not require performing any actions on browser, respond to the request directly (you may use the current browser information and webpage information below as helpful context). In this case, set TASK_COMPLETED: Yes and ONLY provide the RESPONSE_MESSAGE. DO NOT include NEXT_ACTION in your response."
         f"\n\nRespond in the following format:"
         f"\nTASK_COMPLETED: <Yes/No>"
         f"\nRESPONSE_MESSAGE: <Your response>"
-        f"\nNEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action>"
+        f"\nNEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action> (omit this field entirely when the goal is a general request and no action is required)"
         f"\n\nJSON format for next action:"
         f"\n```json"
         f"\n{{"
@@ -1173,7 +1194,7 @@ def extract_page_selectors(browser_instance, max_elements=50):
             const allElements = document.querySelectorAll('button, a, input, select, textarea, [role], [data-testid], [data-cy], [data-qa], .btn, form');
             const maxElements = arguments[0] || 50;
             const elementsToProcess = Array.from(allElements).slice(0, maxElements);
-            
+
             function getXPath(el) {
                 if (!el || el.nodeType !== 1) return '';
                 if (el.id) return '//*[@id="' + el.id + '"]';
@@ -1280,34 +1301,34 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
     try:
         action_data = json.loads(action_json)
         action = action_data['action'][0]
-        
+
         act_type = action.get('act', '')
         detail = action.get('detail', '')
         selector = action.get('selector', '')
-        wait = float(action.get('wait', delay))        
-        
+        wait = float(action.get('wait', delay))
+
         result = None
-        
+
         # Execute action based on action type using SeleniumBase methods
         if act_type == 'navigate_to':
             sb_driver.open(detail)
-            
+
         elif act_type == 'click':
             sb_driver.click(selector)
-            
+
         elif act_type == 'input_text':
             sb_driver.type(selector, detail)
-            
+
         elif act_type == 'select_option':
             sb_driver.select_option_by_text(selector, detail)
-            
+
         elif act_type == 'wait_for_element':
             sb_driver.wait_for_element_visible(selector)
-            
+
         elif act_type == 'extract_text':
             text = sb_driver.get_text(selector)
             result = text
-            
+
         elif act_type == 'scroll':
             if detail.lower() == 'down':
                 sb_driver.execute_script("window.scrollBy(0, 500);")
@@ -1322,7 +1343,7 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
                     sb_driver.scroll_to(detail)
                 except:
                     pass
-            
+
         elif act_type == 'open_tab':
             try:
                 # If detail contains a URL, open tab with that URL, otherwise just open a new tab
@@ -1330,11 +1351,11 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
                     sb_driver.open_new_tab(detail)
                 else:
                     sb_driver.open_new_tab("about:blank")
-                
+
             except Exception as e:
                 print_to_web_chat(f"Error opening new tab: {str(e)}")
                 return False, None
-            
+
         elif act_type == 'switch_tab':
             try:
                 if detail.isdigit():
@@ -1346,7 +1367,7 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
             except Exception as e:
                 print_to_web_chat(f"Error switching tab: {str(e)}")
                 pass
-            
+
         elif act_type == 'submit_form':
             # If selector points to a form
             try:
@@ -1358,7 +1379,7 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
                 except Exception as e:
                     print_to_web_chat(f"Error submitting form: {str(e)}")
                     pass
-        
+
         elif act_type == 'wait':
             try:
                 seconds = float(detail)
@@ -1366,20 +1387,20 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
             except Exception as e:
                 print_to_web_chat(f"Error in wait action: {str(e)}")
                 pass
-        
+
         elif act_type == 'execute_javascript':
             script_result = sb_driver.execute_script(detail)
             if script_result:
                 result = str(script_result)
-        
+
         else:
             print_to_web_chat(f"WARNING: Unrecognized action '{action['act']}'.")
             return False, None
-        
+
         # Wait after action execution
         sb_driver.sleep(wait)
         return True, result
-        
+
     except TimeoutException:
         print_to_web_chat("Timeout waiting for element")
         return False, None
@@ -1387,42 +1408,47 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
         print_to_web_chat(f"Error executing web action: {str(e)}")
         return False, None
 
-def web_assistant(goal="", executed_actions=None, headless=False, use_vision=False):
+def web_assistant(goal="", executed_actions=None, headless=False, use_vision=False, additional_context=None):
     """Main web assistant function for processing and executing web agent tasks using SeleniumBase."""
     clear_stop()
-    
+
     if not goal:
         return "ERROR: No prompt provided. Please provide a prompt to the web assistant."
-    
-    print_to_web_chat(f"Web Task: {goal}")
-    
+
+    # print_to_web_chat(f"Web Task: {goal}")
+
     # Initialize
     if executed_actions is None:
         executed_actions = []
-    
+
+    # Combine conversation context into the goal if provided
+    original_goal = goal
+    if additional_context:
+        original_goal = f"{original_goal}. {additional_context}"
+
     # Get settings with defaults from the same source as main assistant
     settings = get_settings()
     max_attempts = settings.get("web_max_attempts", 20)
     action_delay = settings.get("web_action_delay", 1.5)
-    
+
     # Initialize or reuse browser instance
     global _sb_instance, _driver
     try:
         # Check if the existing driver is still responsive
         if _driver is not None:
             try:
-                # A lightweight operation to check if the browser is still there
-                _driver.title # Accessing a property like title will fail if the browser is closed
-            except Exception as e: # Catches WebDriverException, NoSuchWindowException, etc.
+                # Use a SeleniumBase method to verify the session is alive
+                _driver.get_current_url()
+            except Exception as e:  # Catches WebDriverException, NoSuchWindowException, etc.
                 print_to_web_chat("Browser session lost, re-initializing browser...")
-                if _sb_instance:
-                    try:
-                        _sb_instance.__exit__(None, None, None) # Attempt to clean up the old SB instance
-                    except Exception as e_exit:
-                        print_to_web_chat(f"Error during old SB instance cleanup: {e_exit}")
+                try:
+                    if _sb_instance:
+                        _sb_instance.__exit__(None, None, None)  # Attempt to clean up the old SB instance
+                except Exception as e_exit:
+                    print_to_web_chat(f"Error during old SB instance cleanup: {e_exit}")
                 _sb_instance = None
                 _driver = None
-        
+
         # Initialize browser if it's not already or if it was just reset
         if _sb_instance is None:
             print_to_web_chat("Initializing new browser session...")
@@ -1433,68 +1459,68 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
             # Maximize the browser window
             _driver.maximize_window()
         sb = _driver # Use the (potentially new) driver for the current task
-        
+
         attempt = 0
-        
+
         while attempt < max_attempts and not is_stop_requested():
             # Get browser and webpage information using SeleniumBase driver
             try:
                 current_url = sb.get_current_url()
                 page_title = sb.get_page_title()
-                
+
                 # Get basic page structure (using SeleniumBase's driver access)
                 page_source = sb.get_page_source()
-                
+
                 # Extract important elements (simplified for prompt context)
                 soup = BeautifulSoup(page_source, 'html.parser')
-                
+
                 # Gather forms, inputs, buttons, links
                 forms = len(soup.find_all('form'))
                 inputs = len(soup.find_all('input'))
                 buttons = len(soup.find_all('button'))
                 links = len(soup.find_all('a'))
-                
+
                 # Extract visible text (simplified)
                 body_text = soup.body.get_text(strip=True) if soup.body else ""
                 visible_text = body_text[:1000] + "..." if len(body_text) > 1000 else body_text
-                
+
                 # Extract detailed selector information using SeleniumBase driver
                 page_selectors = extract_page_selectors(sb.driver) # Pass the underlying driver
-                
+
                 # Prepare browser information
                 browser_info = f"Headless Mode: {headless}\nCurrent URL: {current_url}\nPage Title: {page_title}"
-                
+
                 # Prepare webpage information
                 webpage_info = (
                     f"Page has {forms} forms, {inputs} input fields, {buttons} buttons, and {links} links.\n"
                     f"Visible text excerpt:\n{visible_text}\n\n"
                     f"Available page elements (selectors):\n{page_selectors}"
                 )
-                
+
             except Exception as e:
                 browser_info = f"Headless Mode: {headless}\nError getting page info: {str(e)}"
                 webpage_info = "Unable to extract webpage information"
-            
+
             # Create context for the web action
             web_action_context = create_web_action_context(
                 executed_actions,
                 browser_info,
                 webpage_info
             )
-            
+
             # Format messages for api_call
             messages = [
                 {"role": "system", "content": web_action_context},
-                {"role": "user", "content": goal}
+                {"role": "user", "content": original_goal}
             ]
-            
+
             if use_vision:
                 # Use imaging function to get visual analysis with the web_action_context
                 print_to_web_chat("Using vision AI to analyze the page...")
-                
+
                 # Create a complete context that includes the user's goal
-                vision_context = f"{web_action_context}\n\nUser Goal: {goal}"
-                
+                vision_context = f"{web_action_context}\n\nUser Goal: {original_goal}"
+
                 result = imaging(
                     additional_context=vision_context,
                     screenshot_size='Full screen',
@@ -1507,13 +1533,13 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
                     temperature=0.7,
                     max_tokens=1500
                 )
-            
+
             # Parse results
             lines = result.strip().split('\n')
             task_completed = False
             next_action = None
             response_message = None
-            
+
             for line in lines:
                 if line.startswith('TASK_COMPLETED:'):
                     task_completed = 'yes' in line.lower()
@@ -1521,7 +1547,7 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
                     response_message = line[len('RESPONSE_MESSAGE:'):].strip()
                     # Store in executed actions
                     executed_actions.append(line.strip())
-                    
+
                     if response_message.startswith('PAUSE:'):
                         from utils import get_app_instance
                         app = get_app_instance()
@@ -1530,7 +1556,7 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
                         request_stop()
                     elif response_message.startswith('STOP:'):
                         request_stop()
-                        
+
                 elif line.startswith('NEXT_ACTION:'):
                     # Find JSON block
                     json_start = result.find('```json', result.index('NEXT_ACTION:'))
@@ -1545,22 +1571,22 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
                         end_idx = remaining_text.rfind('}') + 1
                         if start_idx != -1 and end_idx != -1:
                             next_action = remaining_text[start_idx:end_idx]
-            
+
             if response_message:
                 # Display and speak the message
                 clean_message = response_message.replace('PAUSE:', '').replace('STOP:', '').strip()
                 print_to_web_chat(clean_message)
                 speaker(clean_message)
-            
+
             if task_completed:
-                return "Task completed! Can I help you with something else?"
-            
+                return
+
             if next_action and not is_stop_requested():
                 # Display the raw JSON action in the chat
                 print_to_web_chat(f"```json\n{next_action}\n```", False)
-                
+
                 success, result_data = execute_web_action(next_action, sb, action_delay) # Pass sb driver
-                
+
                 if not success:
                     print_to_web_chat("Web action execution failed!")
                     speaker("Web action execution failed")
@@ -1569,20 +1595,20 @@ def web_assistant(goal="", executed_actions=None, headless=False, use_vision=Fal
                     try:
                         action_data = json.loads(next_action)
                         action = action_data['action'][0]
-                        
+
                         # Handle results from extract_text and execute_javascript actions
                         if action['act'] in ['extract_text', 'execute_javascript'] and result_data:
                             print_to_web_chat(f"Result: {result_data}")
                             executed_actions.append(f"{action['act']}: {action.get('detail', '')} {action.get('selector', '')} -> Result: {result_data}")
                         else:
                             executed_actions.append(f"{action['act']}: {action.get('detail', '')} {action.get('selector', '')}")
-                            
+
                     except Exception as e:
                         print_to_web_chat(f"Error parsing action JSON: {str(e)}")
                         executed_actions.append(str(next_action))
-            
+
             attempt += 1
-        
+
         if is_stop_requested():
             return "Task execution stopped."
         return "Task incomplete! Maximum number of actions reached."
@@ -1624,6 +1650,28 @@ def create_database(database_file):
     )
     ''')
     conn.commit()
+    # Chat sessions storage
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        agent_type TEXT NOT NULL, -- 'desktop' or 'web'
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER NOT NULL,
+        role TEXT NOT NULL, -- 'user' or 'assistant'
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at)')
+
     conn.close()
 
 def database_add_case(database_file, app_name, goal, instructions):
@@ -1650,6 +1698,86 @@ def print_database(database_file):
     for row in rows:
         print_to_chat(row)
     conn.close()
+
+# --- Chat persistence helpers ---
+
+def chat_create_session(agent_type: str, name: str | None = None) -> int:
+    """Create a new chat session and return its ID."""
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    now = datetime.now().isoformat(timespec='seconds')
+    name = name or ""
+    cursor.execute(
+        "INSERT INTO chat_sessions(name, agent_type, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (name, agent_type, now, now)
+    )
+    session_id = cursor.lastrowid
+    conn.commit(); conn.close()
+    return session_id
+
+
+def chat_rename_session(session_id: int, new_name: str) -> None:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    now = datetime.now().isoformat(timespec='seconds')
+    cursor.execute("UPDATE chat_sessions SET name=?, updated_at=? WHERE id=?", (new_name, now, session_id))
+    conn.commit(); conn.close()
+
+
+def chat_delete_session(session_id: int) -> None:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+    cursor.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
+    conn.commit(); conn.close()
+
+
+def chat_clear_session_messages(session_id: int) -> None:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+    conn.commit(); conn.close()
+
+
+def chat_list_sessions(agent_type: str) -> list[dict]:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, name, agent_type, created_at, updated_at FROM chat_sessions WHERE agent_type=? ORDER BY updated_at DESC, created_at DESC",
+        (agent_type,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "name": r[1] or "", "agent_type": r[2], "created_at": r[3], "updated_at": r[4]}
+        for r in rows
+    ]
+
+
+def chat_add_message(session_id: int, role: str, content: str) -> None:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    now = datetime.now().isoformat(timespec='seconds')
+    cursor.execute(
+        "INSERT INTO chat_messages(session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+        (session_id, role, content, now)
+    )
+    cursor.execute("UPDATE chat_sessions SET updated_at=? WHERE id=?", (now, session_id))
+    conn.commit(); conn.close()
+
+
+def chat_list_messages(session_id: int) -> list[dict]:
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT role, content, created_at FROM chat_messages WHERE session_id=? ORDER BY created_at ASC",
+        (session_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"role": r[0], "content": r[1], "created_at": r[2]} for r in rows
+    ]
 
 # Initialize database
 database_file = r'history.db'

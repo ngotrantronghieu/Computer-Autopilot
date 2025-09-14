@@ -11,20 +11,28 @@ import re
 import sys
 import uuid
 import winreg
+import tempfile
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton,
                               QVBoxLayout, QHBoxLayout, QLineEdit, QScrollArea,
                               QLabel, QFrame, QSlider, QCheckBox, QDialog, QTabWidget,
-                              QTextEdit, QDialogButtonBox, QMessageBox,
+                              QTextEdit, QDialogButtonBox, QMessageBox, QSystemTrayIcon, QMenu,
                               QListWidget, QComboBox, QStackedWidget, QSpinBox,
                               QDoubleSpinBox, QListWidgetItem, QGroupBox, QTimeEdit,
-                              QDateEdit)
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG, QTime, QDate
-from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
+                              QDateEdit, QInputDialog)
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG, QTime, QDate, QLocale, QDateTime, QLockFile
+from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence, QAction
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from voice import speaker, set_volume, set_subtitles
-from driver import assistant, fast_act, auto_role, perform_simulated_keypress, write_action, request_stop, clear_stop, execute_action, web_assistant, close_browser
+from driver import (
+    assistant, fast_act, perform_simulated_keypress, write_action,
+    request_stop, clear_stop, execute_action, web_assistant, close_browser,
+    chat_create_session, chat_rename_session, chat_delete_session,
+    chat_clear_session_messages, chat_list_sessions, chat_add_message,
+    chat_list_messages
+)
 from window_focus import activate_window_title
 from utils import set_app_instance, get_app_instance, print_to_chat, print_to_web_chat
-from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key, api_call
+from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key
 from langdetect import detect
 from tasks import save_task, delete_task, get_task, load_tasks
 from pynput import mouse, keyboard
@@ -68,6 +76,34 @@ def load_settings():
     except Exception as e:
         print(f"Error loading settings: {e}")
         return default_settings
+
+
+# Helper: format session timestamps to short, local format for UI labels
+def _format_session_timestamp(dt_str) -> str:
+    try:
+        s = (dt_str or "").strip()
+        if not s:
+            return ""
+        # Normalize trailing Z to +00:00 for fromisoformat
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except Exception:
+            # If parsing fails, show raw
+            return dt_str
+        # Convert to local time if aware
+        if getattr(dt, 'tzinfo', None) is not None:
+            dt = dt.astimezone()
+        # Prefer Qt locale-aware short format
+        try:
+            qdt = QDateTime(dt)
+            return QLocale.system().toString(qdt, QLocale.ShortFormat)
+        except Exception:
+            # Fallback to a compact local format
+            return dt.strftime("%x %H:%M")
+    except Exception:
+        return str(dt_str)
 
 class MessageBubble(QFrame):
     def __init__(self, message, is_user=True, parent=None):
@@ -485,7 +521,7 @@ class SettingsDialog(QDialog):
 
         # Online models index cache
         self._models_index = None
-        
+
         # Fetch models index cache
         def fetch_models_index():
             if self._models_index is not None:
@@ -502,7 +538,7 @@ class SettingsDialog(QDialog):
             except Exception:
                 self._models_index = None
                 return False
-            
+
         # List models for provider
         def list_models_for_provider(provider: str, vision_only: bool=False):
             models = []
@@ -857,7 +893,8 @@ class SettingsDialog(QDialog):
         startup_layout = QHBoxLayout(startup_container)
         startup_layout.addWidget(QLabel("Start with Windows:"))
         self.startup_check = QCheckBox()
-        self.startup_check.setChecked(start_with_windows)
+        # Reflect actual registry state rather than only saved settings
+        self.startup_check.setChecked(is_startup_enabled())
         startup_layout.addWidget(self.startup_check)
         performance_layout.addWidget(startup_container)
 
@@ -1072,83 +1109,136 @@ class SettingsDialog(QDialog):
 
         super().accept()
 
-def enable_startup():
-    """Enable app to start with Windows"""
+def _enable_startup_powershell():
+    """Create Startup shortcut via PowerShell (no pywin32 dependency)."""
     try:
+        # Determine target, working dir, and args
+        if getattr(sys, 'frozen', False):
+            exe_path = sys.executable
+            working_dir = os.path.dirname(sys.executable)
+            args = ""
+        else:
+            exe_path = sys.executable
+            working_dir = os.path.dirname(os.path.abspath(__file__))
+            args = f'"{os.path.abspath(sys.argv[0])}"'
 
-        # Get path to current executable
-        exe_path = os.path.abspath(sys.argv[0])
-        if exe_path.endswith('.py'):
-            # If running from .py, use pythonw to run in background
-            exe_path = f'pythonw "{exe_path}"'
+        startup_folder = os.path.join(
+            os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
+        )
+        shortcut_path = os.path.join(startup_folder, 'ComputerAutopilot.lnk')
 
-        # Open Windows registry
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0,
-            winreg.KEY_SET_VALUE
+        # Build a PowerShell one-liner to create the .lnk
+        ps = (
+            f"$WshShell = New-Object -ComObject WScript.Shell; "
+            f"$Shortcut = $WshShell.CreateShortcut('{shortcut_path}'); "
+            f"$Shortcut.TargetPath = '{exe_path}'; "
+            f"$Shortcut.WorkingDirectory = '{working_dir}'; "
+            f"$Shortcut.Arguments = '{args}'; "
+            f"$Shortcut.Description = 'Computer Autopilot - AI Assistant'; "
+            f"$Shortcut.Save()"
         )
 
-        # Add registry value
-        winreg.SetValueEx(
-            key,
-            "ComputerAutopilot",
-            0,
-            winreg.REG_SZ,
-            exe_path
-        )
-
-        winreg.CloseKey(key)
+        import subprocess
+        result = subprocess.run([
+            "powershell", "-NoProfile", "-Command", ps
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            if result.stderr:
+                print(f"PowerShell error creating startup shortcut: {result.stderr}")
+            return False
         return True
+    except Exception as e:
+        print(f"Error in PowerShell fallback for startup: {e}")
+        return False
+
+def enable_startup():
+    """Enable app to start with Windows using Startup folder shortcut"""
+    try:
+        import win32com.client
+
+        # Get the correct executable path
+        if getattr(sys, 'frozen', False):
+            # PyInstaller executable
+            exe_path = sys.executable
+            working_dir = os.path.dirname(sys.executable)
+        else:
+            # Running from Python script
+            exe_path = sys.executable
+            working_dir = os.path.dirname(os.path.abspath(__file__))
+            # For .py files, we need to pass the script as an argument; handled below
+
+        # Get Startup folder path
+        startup_folder = os.path.join(
+            os.environ['APPDATA'],
+            'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
+        )
+
+        # Create shortcut path
+        shortcut_path = os.path.join(startup_folder, 'ComputerAutopilot.lnk')
+
+        # Create shortcut using COM
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(shortcut_path)
+
+        if getattr(sys, 'frozen', False):
+            # For PyInstaller executable
+            shortcut.Targetpath = exe_path
+            shortcut.WorkingDirectory = working_dir
+            shortcut.Arguments = ""
+        else:
+            # For Python script
+            shortcut.Targetpath = exe_path
+            shortcut.WorkingDirectory = working_dir
+            shortcut.Arguments = f'"{os.path.abspath(sys.argv[0])}"'
+
+        shortcut.Description = "Computer Autopilot - AI Assistant"
+        shortcut.save()
+
+        return True
+    except ImportError:
+        # Fallback to PowerShell if win32com is not available
+        return _enable_startup_powershell()
     except Exception as e:
         print(f"Error enabling startup: {e}")
         return False
 
 def disable_startup():
-    """Disable app from starting with Windows"""
+    """Disable app from starting with Windows by removing Startup shortcut (and legacy registry value)."""
     try:
-
-        # Open Windows registry
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0,
-            winreg.KEY_SET_VALUE
+        startup_folder = os.path.join(
+            os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
         )
-
-        # Delete registry value
+        shortcut_path = os.path.join(startup_folder, 'ComputerAutopilot.lnk')
+        if os.path.exists(shortcut_path):
+            os.remove(shortcut_path)
+        # Also remove legacy registry value if present (best-effort)
         try:
-            winreg.DeleteValue(key, "ComputerAutopilot")
-        except WindowsError:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                0,
+                winreg.KEY_SET_VALUE
+            )
+            try:
+                winreg.DeleteValue(key, "ComputerAutopilot")
+            except WindowsError:
+                pass
+            winreg.CloseKey(key)
+        except Exception:
             pass
-
-        winreg.CloseKey(key)
         return True
     except Exception as e:
         print(f"Error disabling startup: {e}")
         return False
 
 def is_startup_enabled():
-    """Check if app is set to start with Windows"""
+    """Check if app is set to start with Windows by verifying Startup shortcut exists."""
     try:
-
-        # Open Windows registry
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0,
-            winreg.KEY_READ
+        startup_folder = os.path.join(
+            os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
         )
-
-        try:
-            winreg.QueryValueEx(key, "ComputerAutopilot")
-            enabled = True
-        except WindowsError:
-            enabled = False
-
-        winreg.CloseKey(key)
-        return enabled
+        shortcut_path = os.path.join(startup_folder, 'ComputerAutopilot.lnk')
+        return os.path.exists(shortcut_path)
     except Exception as e:
         print(f"Error checking startup: {e}")
         return False
@@ -1170,6 +1260,22 @@ class ModernChatInterface(QMainWindow):
         # Set window icon (this ensures consistency with taskbar)
         self.setWindowIcon(QApplication.windowIcon())
 
+        # System tray support
+        self._tray_quit = False
+        self._tray_message_shown = False
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            # Call helper if present; otherwise create a minimal tray icon inline
+            if hasattr(self, "_create_tray_icon"):
+                self._create_tray_icon()
+            else:
+                try:
+                    self.tray_icon = QSystemTrayIcon(QApplication.windowIcon(), self)
+                    self.tray_icon.setToolTip("Computer Autopilot")
+                    self.tray_icon.show()
+                except Exception:
+                    pass
+
+
         # Initialize main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -1178,6 +1284,12 @@ class ModernChatInterface(QMainWindow):
         # Chat area
         self.chat_area = ChatArea()
         layout.addWidget(self.chat_area)
+
+        # In-memory chat history (list of {role, content}) for conversation context
+        self.chat_history = []
+
+        # In-memory chat history for context to the assistant
+        self.chat_history = []
 
         # Input area
         input_container = QWidget()
@@ -1277,8 +1389,8 @@ class ModernChatInterface(QMainWindow):
         self.subtitles_checkbox.stateChanged.connect(self.toggle_subtitles)
         self.settings_button.clicked.connect(self.open_settings_window)
 
-        # Connect clear chat button
-        self.clear_chat_button.clicked.connect(self.clear_chat)
+        # Connect clear chat button (integrated with session clear)
+        self.clear_chat_button.clicked.connect(lambda: self._on_desktop_clear_messages())
 
         # Apply modern styling
         self.apply_styling()
@@ -1304,6 +1416,35 @@ class ModernChatInterface(QMainWindow):
         # Create chat tab
         chat_tab = QWidget()
         chat_layout = QVBoxLayout(chat_tab)
+
+        # Sessions bar for Desktop Chat
+        self.desktop_session_combo = QComboBox()
+        self.desktop_new_btn = QPushButton("New Session")
+        self.desktop_rename_btn = QPushButton("Rename")
+        self.desktop_delete_btn = QPushButton("Delete")
+        sess_bar = QWidget()
+        sess_bar_layout = QHBoxLayout(sess_bar)
+        sess_bar_layout.setContentsMargins(0, 0, 0, 0)
+        sess_bar_layout.addWidget(QLabel("Session:"))
+        sess_bar_layout.addWidget(self.desktop_session_combo)
+        sess_bar_layout.addStretch(1)
+        sess_bar_layout.addWidget(self.desktop_new_btn)
+        sess_bar_layout.addWidget(self.desktop_rename_btn)
+        sess_bar_layout.addWidget(self.desktop_delete_btn)
+        chat_layout.addWidget(sess_bar)
+
+        # Desktop chat session state
+        self.desktop_current_session_id = None
+        self._desktop_restoring = False
+
+        # Connect session controls
+        self.desktop_session_combo.currentIndexChanged.connect(self._on_desktop_session_changed)
+        self.desktop_new_btn.clicked.connect(self._on_desktop_new_session)
+        self.desktop_rename_btn.clicked.connect(self._on_desktop_rename_session)
+        self.desktop_delete_btn.clicked.connect(self._on_desktop_delete_session)
+
+        # Initialize sessions per preference (always start new)
+        self._init_desktop_sessions()
 
         # Move existing chat widgets to chat tab
         chat_layout.addWidget(self.chat_area)
@@ -1334,6 +1475,79 @@ class ModernChatInterface(QMainWindow):
 
         # Connect tab change signal
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
+    def _create_tray_icon(self):
+        """Create and show the system tray icon with context menu."""
+        try:
+            icon = QApplication.windowIcon()
+            self.tray_icon = QSystemTrayIcon(icon, self)
+            self.tray_icon.setToolTip("Computer Autopilot")
+
+            # Context menu
+            menu = QMenu()
+            action_show = QAction("Show", self)
+            action_show.triggered.connect(self.restore_from_tray)
+            menu.addAction(action_show)
+
+            action_quit = QAction("Quit", self)
+            action_quit.triggered.connect(self.quit_from_tray)
+            menu.addAction(action_quit)
+
+            self.tray_icon.setContextMenu(menu)
+            self.tray_icon.activated.connect(self.on_tray_activated)
+            self.tray_icon.show()
+        except Exception as e:
+            print(f"Error creating system tray icon: {e}")
+
+    def restore_from_tray(self):
+        try:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
+
+    def quit_from_tray(self):
+        """Quit the application from the tray menu, ensuring background threads stop."""
+        self._tray_quit = True
+        # Hide tray icon if present
+        try:
+            if hasattr(self, 'tray_icon'):
+                self.tray_icon.hide()
+        except Exception:
+            pass
+        # Attempt to stop any running tasks/threads gracefully
+        try:
+            if hasattr(self, 'tab_widget'):
+                for i in range(self.tab_widget.count()):
+                    tab = self.tab_widget.widget(i)
+                    if hasattr(tab, 'stop_execution'):
+                        try:
+                            tab.stop_execution()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        # Close browser/resources if available
+        try:
+            if hasattr(self, 'close_browser'):
+                self.close_browser()
+        except Exception:
+            pass
+        # Request application quit
+        try:
+            QApplication.instance().quit()
+        except Exception:
+            # As last resort
+            sys.exit(0)
+
+    def on_tray_activated(self, reason):
+        try:
+            # Single click or double click restores window
+            if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+                self.restore_from_tray()
+        except Exception:
+            pass
 
     def changeEvent(self, event):
         if (event.type() == QEvent.Type.WindowStateChange):
@@ -1431,14 +1645,58 @@ class ModernChatInterface(QMainWindow):
         """)
 
     def add_message(self, message, is_user=True):
-        """Add a message bubble to the chat area"""
+        """Add a message bubble to the chat area and store in chat history"""
         bubble = MessageBubble(message, is_user)
         self.chat_area.layout.addWidget(bubble)
+
+        # Update in-memory chat history for context building
+        role = "user" if is_user else "assistant"
+        prev_len = len(getattr(self, 'chat_history', []) or [])
+        try:
+            self.chat_history.append({"role": role, "content": str(message)})
+        except Exception:
+            # Best effort; do not break UI if chat_history isn't available
+            pass
+
+        # Persist to current desktop session if applicable and not in restore mode
+        try:
+            if hasattr(self, 'desktop_current_session_id') and self.desktop_current_session_id and not getattr(self, '_desktop_restoring', False):
+                chat_add_message(self.desktop_current_session_id, role, str(message))
+                # If this is the first user message in a new session, auto-name it
+                if is_user and prev_len == 0:
+                    first_line = str(message).strip()
+                    if first_line:
+                        chat_rename_session(self.desktop_current_session_id, first_line[:60])
+                        self._refresh_desktop_sessions(select_id=self.desktop_current_session_id)
+        except Exception:
+            pass
 
         # Auto scroll to bottom
         self.chat_area.verticalScrollBar().setValue(
             self.chat_area.verticalScrollBar().maximum()
         )
+
+    def build_conversation_context(self, max_messages: int = 20, max_chars: int = 6000) -> str:
+        """Build a compact conversation history string for model context.
+        Includes the most recent messages up to limits, labeled by speaker.
+        """
+        try:
+            history = getattr(self, "chat_history", []) or []
+            recent = history[-max_messages:]
+            lines = []
+            for msg in recent:
+                role = msg.get("role", "assistant")
+                speaker = "User" if role == "user" else "Assistant"
+                content = str(msg.get("content", ""))
+                lines.append(f"{speaker}: {content}")
+            text = "\n".join(lines)
+            # Enforce rough char budget by trimming from the start
+            if len(text) > max_chars:
+                text = text[-max_chars:]
+            return f"Conversation history (most recent first at bottom):\n{text}"
+        except Exception:
+            return ""
+
 
     def handle_send_stop(self):
         """Handle send/stop button click based on current state"""
@@ -1598,23 +1856,35 @@ class ModernChatInterface(QMainWindow):
                     self.complete_task(response)
                 else:
                     # For complex tasks, determine role and use assistant
-                    response = auto_role(message)
-                    if response:
-                        if "windows_assistant" in response:
-                            result = assistant(
-                                goal=message,
-                                executed_actions=self.paused_actions,
-                                additional_context=self.additional_context,
-                                resumed=resumed
-                            )
-                            self.complete_task(result)
-                        else:
-                            joyful_response = api_call(
-                                [{"role": "user", "content": message}],
-                                temperature=0.7,
-                                max_tokens=1000
-                            )
-                            self.complete_task(joyful_response, speak=False)
+                    # response = auto_role(message)
+                    # if response:
+                    #     if "windows_assistant" in response:
+                    #         result = assistant(
+                    #             goal=message,
+                    #             executed_actions=self.paused_actions,
+                    #             additional_context=self.additional_context,
+                    #             resumed=resumed
+                    #         )
+                    #         self.complete_task(result)
+                    #     else:
+                    #         joyful_response = api_call(
+                    #             [{"role": "user", "content": message}],
+                    #             temperature=0.7,
+                    #             max_tokens=1000
+                    #         )
+                    #         self.complete_task(joyful_response, speak=False)
+                    # Build conversation context to include entire chat history (not just executed actions)
+                    conv_context = self.build_conversation_context(max_messages=20, max_chars=6000)
+                    addl = self.additional_context if self.additional_context else ""
+                    combined_context = conv_context if not addl else f"{conv_context}\n\nAdditional Context: {addl}"
+                    print_to_chat(f"Combined context: {combined_context}")
+                    result = assistant(
+                        goal=message,
+                        executed_actions=self.paused_actions,
+                        additional_context=combined_context,
+                        resumed=resumed
+                    )
+                    self.complete_task(result)
 
                 # if not self.isActiveWindow():
                 #     self.show()
@@ -1858,6 +2128,118 @@ class ModernChatInterface(QMainWindow):
                 # Start execution of selected task
                 rpa_tab.execute_selected_task()
             self.update_mini_control()
+    # --- Desktop chat session management ---
+    def _init_desktop_sessions(self):
+        """Start with a fresh session and load sessions list (preference 3.B)."""
+        # Create a brand-new session with empty name; it'll be renamed on first user msg
+        sid = chat_create_session('desktop', "")
+        self.desktop_current_session_id = sid
+        self._refresh_desktop_sessions(select_id=sid)
+        # Nothing to load for a new session
+
+    def _refresh_desktop_sessions(self, select_id=None):
+        sessions = chat_list_sessions('desktop')
+        self.desktop_session_combo.blockSignals(True)
+        self.desktop_session_combo.clear()
+        for sess in sessions:
+            label_name = sess['name'] if sess['name'] else 'New chat'
+            dt_str = _format_session_timestamp(sess.get('created_at'))
+            label = f"{label_name} — {dt_str}" if dt_str else label_name
+            self.desktop_session_combo.addItem(label, sess['id'])
+        self.desktop_session_combo.blockSignals(False)
+        # Select current
+        if select_id is not None:
+            for i in range(self.desktop_session_combo.count()):
+                if self.desktop_session_combo.itemData(i) == select_id:
+                    self.desktop_session_combo.setCurrentIndex(i)
+                    break
+
+    def _delete_desktop_session_if_empty(self, session_id: int) -> bool:
+        """Delete the given desktop session if it has no messages. Returns True if deleted."""
+        try:
+            if not session_id:
+                return False
+            msgs = chat_list_messages(session_id)
+            if not msgs:
+                chat_delete_session(session_id)
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _on_desktop_session_changed(self, index):
+        if index < 0:
+            return
+        new_id = self.desktop_session_combo.itemData(index)
+        if not new_id or new_id == self.desktop_current_session_id:
+            return
+        old_id = getattr(self, 'desktop_current_session_id', None)
+        if old_id and old_id != new_id:
+            if self._delete_desktop_session_if_empty(old_id):
+                # Refresh list to drop the deleted session
+                self._refresh_desktop_sessions(select_id=new_id)
+        self.desktop_current_session_id = new_id
+        self._load_desktop_session_messages(new_id)
+
+    def _on_desktop_new_session(self):
+        # If current is empty, remove it so empty sessions are not saved
+        curr_id = getattr(self, 'desktop_current_session_id', None)
+        if curr_id:
+            self._delete_desktop_session_if_empty(curr_id)
+        sid = chat_create_session('desktop', "")
+        self.desktop_current_session_id = sid
+        self._refresh_desktop_sessions(select_id=sid)
+        self.clear_chat()
+
+    def _on_desktop_rename_session(self):
+        if not self.desktop_current_session_id:
+            return
+        current_name = ""
+        try:
+            for sess in chat_list_sessions('desktop'):
+                if sess['id'] == self.desktop_current_session_id:
+                    current_name = sess.get('name') or ""
+                    break
+        except Exception:
+            pass
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Session", "New name:", QLineEdit.Normal, current_name
+        )
+        if ok and new_name.strip():
+            chat_rename_session(self.desktop_current_session_id, new_name.strip())
+            self._refresh_desktop_sessions(select_id=self.desktop_current_session_id)
+
+    def _on_desktop_delete_session(self):
+        if not self.desktop_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Delete Session", "Delete this session and all messages?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_delete_session(self.desktop_current_session_id)
+            # Start a new one after delete
+            sid = chat_create_session('desktop', "")
+            self.desktop_current_session_id = sid
+            self._refresh_desktop_sessions(select_id=sid)
+            self.clear_chat()
+
+    def _on_desktop_clear_messages(self):
+        if not self.desktop_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Clear Messages", "Clear all messages in this session?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_clear_session_messages(self.desktop_current_session_id)
+            self.clear_chat()
+
+    def _load_desktop_session_messages(self, session_id: int):
+        # Restore messages to UI and in-memory context without re-saving
+        self.clear_chat()
+        self._desktop_restoring = True
+        try:
+            msgs = chat_list_messages(session_id)
+            for m in msgs:
+                is_user = (m['role'] == 'user')
+                self.add_message(m['content'], is_user)
+        finally:
+            self._desktop_restoring = False
 
     def handle_mini_control_stop(self):
         """Handle stop button click for mini control interface"""
@@ -1867,15 +2249,63 @@ class ModernChatInterface(QMainWindow):
             self.update_mini_control()
 
     def clear_chat(self):
-        """Clear all messages from the chat area"""
+        """Clear all messages from the chat area and reset conversation history."""
         # Remove all message bubbles
         while self.chat_area.layout.count():
             child = self.chat_area.layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
+        # Also clear in-memory conversation history used for context
+        try:
+            if hasattr(self, "chat_history") and isinstance(self.chat_history, list):
+                self.chat_history.clear()
+            else:
+                self.chat_history = []
+        except Exception:
+            # Ensure we at least reset the reference
+            self.chat_history = []
+
     def closeEvent(self, event):
-        """Handle application close event"""
+        """Minimize to system tray on window close, unless quitting from tray."""
+        # Prune any empty sessions so they aren't saved
+        try:
+            curr_desktop = getattr(self, 'desktop_current_session_id', None)
+            if curr_desktop:
+                self._delete_desktop_session_if_empty(curr_desktop)
+        except Exception:
+            pass
+        try:
+            web_tab = None
+            if hasattr(self, 'tab_widget') and self.tab_widget.count() > 1:
+                web_tab = self.tab_widget.widget(1)
+            if web_tab and getattr(web_tab, 'web_current_session_id', None):
+                web_tab._delete_web_session_if_empty(web_tab.web_current_session_id)
+        except Exception:
+            pass
+        try:
+            if QSystemTrayIcon.isSystemTrayAvailable() and not getattr(self, "_tray_quit", False):
+                # Hide instead of closing
+                event.ignore()
+                self.hide()
+                # Inform user once
+                if not getattr(self, "_tray_message_shown", False) and hasattr(self, 'tray_icon'):
+                    try:
+                        self.tray_icon.showMessage(
+                            "Computer Autopilot",
+                            "Still running in the background. Use the tray icon to restore or quit.",
+                            QSystemTrayIcon.Information,
+
+                            3000
+                        )
+                        self._tray_message_shown = True
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            # If tray is not available or any error occurs, proceed to close
+            pass
+
         # Clean up browser resources when app is closing
         try:
             if hasattr(self, 'close_browser'):
@@ -1883,8 +2313,14 @@ class ModernChatInterface(QMainWindow):
         except Exception as e:
             print(f"Error closing browser: {str(e)}")
 
-        # Accept the close event
+        # Accept the close event to quit the app
         event.accept()
+        # If this close was initiated as a real quit (from tray), request app quit
+        if getattr(self, "_tray_quit", False):
+            try:
+                QApplication.instance().quit()
+            except Exception:
+                pass
 
 class MiniChatInterface(QWidget):
     def __init__(self, parent=None):
@@ -1934,6 +2370,7 @@ class MiniChatInterface(QWidget):
                 border-radius: 3px;
                 padding: 5px;
             }
+
             QPushButton {
                 background-color: #2196F3;
                 color: white;
@@ -1995,6 +2432,10 @@ class WebAgentTab(QWidget):
         self.chat_area = ChatArea()
         layout.addWidget(self.chat_area)
 
+        # In-memory chat history for Web Agent (list of {role, content})
+        self.chat_history = []
+
+
         # Input area
         input_container = QWidget()
         input_layout = QHBoxLayout(input_container)
@@ -2018,6 +2459,35 @@ class WebAgentTab(QWidget):
         control_layout.addWidget(self.send_stop_button)
         control_layout.addWidget(self.pause_resume_button)
         input_layout.addWidget(control_container)
+        # Sessions bar for Web Agent
+        self.web_session_combo = QComboBox()
+        self.web_new_btn = QPushButton("New Session")
+        self.web_rename_btn = QPushButton("Rename")
+        self.web_delete_btn = QPushButton("Delete")
+        web_sess_bar = QWidget()
+        web_sess_layout = QHBoxLayout(web_sess_bar)
+        web_sess_layout.setContentsMargins(0, 0, 0, 0)
+        web_sess_layout.addWidget(QLabel("Session:"))
+        web_sess_layout.addWidget(self.web_session_combo)
+        web_sess_layout.addStretch(1)
+        web_sess_layout.addWidget(self.web_new_btn)
+        web_sess_layout.addWidget(self.web_rename_btn)
+        web_sess_layout.addWidget(self.web_delete_btn)
+        layout.addWidget(web_sess_bar)
+
+        # Web chat session state
+        self.web_current_session_id = None
+        self._web_restoring = False
+
+        # Connect session controls
+        self.web_session_combo.currentIndexChanged.connect(self._on_web_session_changed)
+        self.web_new_btn.clicked.connect(self._on_web_new_session)
+        self.web_rename_btn.clicked.connect(self._on_web_rename_session)
+        self.web_delete_btn.clicked.connect(self._on_web_delete_session)
+
+        # Initialize sessions per preference (always start new)
+        self._init_web_sessions()
+
 
         # Voice button with improved styling
         self.voice_button = QPushButton("🎤")
@@ -2030,6 +2500,7 @@ class WebAgentTab(QWidget):
             QPushButton {
                 background-color: #2196F3;
                 color: white;
+
                 border: none;
                 border-radius: 5px;
                 padding: 0px;
@@ -2088,7 +2559,8 @@ class WebAgentTab(QWidget):
 
         # Clear chat button
         self.clear_chat_button = QPushButton("Clear Chat")
-        self.clear_chat_button.clicked.connect(self.clear_chat)
+        # Integrate with session clear for Web
+        self.clear_chat_button.clicked.connect(lambda: self._on_web_clear_messages())
 
         # Mute button
         self.mute_button = QPushButton("🔊")
@@ -2159,14 +2631,54 @@ class WebAgentTab(QWidget):
         """)
 
     def add_message(self, message, is_user=True):
-        """Add a message bubble to the chat area"""
+        """Add a message bubble to the chat area and store in chat history"""
         bubble = MessageBubble(message, is_user)
         self.chat_area.layout.addWidget(bubble)
+
+        # Update in-memory chat history for context building
+        role = "user" if is_user else "assistant"
+        prev_len = len(getattr(self, 'chat_history', []) or [])
+        try:
+            self.chat_history.append({"role": role, "content": str(message)})
+        except Exception:
+            pass
+
+        # Persist to current web session if applicable and not in restore mode
+        try:
+            if hasattr(self, 'web_current_session_id') and self.web_current_session_id and not getattr(self, '_web_restoring', False):
+                chat_add_message(self.web_current_session_id, role, str(message))
+                # If this is the first user message in a new session, auto-name it
+                if is_user and prev_len == 0:
+                    first_line = str(message).strip()
+                    if first_line:
+                        chat_rename_session(self.web_current_session_id, first_line[:60])
+                        self._refresh_web_sessions(select_id=self.web_current_session_id)
+        except Exception:
+            pass
 
         # Auto scroll to bottom
         self.chat_area.verticalScrollBar().setValue(
             self.chat_area.verticalScrollBar().maximum()
         )
+
+    def build_conversation_context(self, max_messages: int = 20, max_chars: int = 6000) -> str:
+        """Build a compact conversation history string for Web Agent context."""
+        try:
+            history = getattr(self, "chat_history", []) or []
+            recent = history[-max_messages:]
+            lines = []
+            for msg in recent:
+                role = msg.get("role", "assistant")
+                speaker = "User" if role == "user" else "Assistant"
+                content = str(msg.get("content", ""))
+                lines.append(f"{speaker}: {content}")
+            text = "\n".join(lines)
+            if len(text) > max_chars:
+                text = text[-max_chars:]
+            return f"Conversation history (most recent first at bottom):\n{text}"
+        except Exception:
+            return ""
+
 
     def handle_send_stop(self):
         """Handle send/stop button click based on current state"""
@@ -2201,7 +2713,7 @@ class WebAgentTab(QWidget):
 
             # Process message in a separate thread
             self.set_stop_mode()
-            threading.Thread(target=self.process_message, args=(message,)).start()
+            threading.Thread(target=self.process_message, args=(message,), daemon=True).start()
 
     def process_message(self, message, resumed=False):
         """Process message and execute web actions"""
@@ -2214,25 +2726,26 @@ class WebAgentTab(QWidget):
             headless = self.headless_checkbox.isChecked()
             use_vision = self.vision_checkbox.isChecked()
 
+            # Build conversation context to include entire chat history
+            conv_context = self.build_conversation_context(max_messages=20, max_chars=6000)
+            addl = self.additional_context if self.additional_context else ""
+            combined_context = conv_context if not addl else f"{conv_context}\n\nContext: {addl}"
+
             result = web_assistant(
                 goal=message,
                 executed_actions=self.paused_actions if resumed else None,
                 headless=headless,
-                use_vision=use_vision
+                use_vision=use_vision,
+                additional_context=combined_context
             )
 
             if not self.paused_execution:
-                # Display the final result message
-                if result:
-                    print_to_web_chat(result)
-                    speaker(result)
-
                 # Use invokeMethod safely
                 QMetaObject.invokeMethod(
                     self,
                     "complete_task",
                     Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, result)
+                    Q_ARG(str, result or "")
                 )
 
         except Exception as e:
@@ -2244,6 +2757,7 @@ class WebAgentTab(QWidget):
             QMetaObject.invokeMethod(
                 self,
                 "set_send_mode",
+
                 Qt.ConnectionType.QueuedConnection
             )
         finally:
@@ -2292,7 +2806,7 @@ class WebAgentTab(QWidget):
                 self.additional_context = additional_info
             # Resume the task execution
             if self.paused_goal:
-                threading.Thread(target=self.process_message, args=(self.paused_goal, True)).start()
+                threading.Thread(target=self.process_message, args=(self.paused_goal, True), daemon=True).start()
         else:
             # Pause execution
             self.pause_resume_button.setText("Resume")
@@ -2303,10 +2817,117 @@ class WebAgentTab(QWidget):
             self.input_field.setEnabled(True)
 
     @Slot(str)
-    def complete_task(self, result=""):
+    def complete_task(self, result=None):
         """Complete the task and update UI"""
         self.set_send_mode()
-        # Result is already displayed via messageReceived signal
+        # Display the final result message
+        if result:
+            self.add_message(result, is_user=False)
+            speaker(result)
+
+    # --- Web chat session management ---
+    def _init_web_sessions(self):
+        sid = chat_create_session('web', "")
+        self.web_current_session_id = sid
+        self._refresh_web_sessions(select_id=sid)
+
+    def _refresh_web_sessions(self, select_id=None):
+        sessions = chat_list_sessions('web')
+        self.web_session_combo.blockSignals(True)
+        self.web_session_combo.clear()
+        for sess in sessions:
+            label_name = sess['name'] if sess['name'] else 'New chat'
+            dt_str = _format_session_timestamp(sess.get('created_at'))
+            label = f"{label_name} — {dt_str}" if dt_str else label_name
+            self.web_session_combo.addItem(label, sess['id'])
+        self.web_session_combo.blockSignals(False)
+        if select_id is not None:
+            for i in range(self.web_session_combo.count()):
+                if self.web_session_combo.itemData(i) == select_id:
+                    self.web_session_combo.setCurrentIndex(i)
+                    break
+
+    def _delete_web_session_if_empty(self, session_id: int) -> bool:
+        try:
+            if not session_id:
+                return False
+            msgs = chat_list_messages(session_id)
+            if not msgs:
+                chat_delete_session(session_id)
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _on_web_session_changed(self, index):
+        if index < 0:
+            return
+        new_id = self.web_session_combo.itemData(index)
+        if not new_id or new_id == self.web_current_session_id:
+            return
+        old_id = getattr(self, 'web_current_session_id', None)
+        if old_id and old_id != new_id:
+            if self._delete_web_session_if_empty(old_id):
+                self._refresh_web_sessions(select_id=new_id)
+        self.web_current_session_id = new_id
+        self._load_web_session_messages(new_id)
+
+    def _on_web_new_session(self):
+        curr_id = getattr(self, 'web_current_session_id', None)
+        if curr_id:
+            self._delete_web_session_if_empty(curr_id)
+        sid = chat_create_session('web', "")
+        self.web_current_session_id = sid
+        self._refresh_web_sessions(select_id=sid)
+        self.clear_chat()
+
+    def _on_web_rename_session(self):
+        if not self.web_current_session_id:
+            return
+        current_name = ""
+        try:
+            for sess in chat_list_sessions('web'):
+                if sess['id'] == self.web_current_session_id:
+                    current_name = sess.get('name') or ""
+                    break
+        except Exception:
+            pass
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Session", "New name:", QLineEdit.Normal, current_name
+        )
+        if ok and new_name.strip():
+            chat_rename_session(self.web_current_session_id, new_name.strip())
+            self._refresh_web_sessions(select_id=self.web_current_session_id)
+
+    def _on_web_delete_session(self):
+        if not self.web_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Delete Session", "Delete this session and all messages?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_delete_session(self.web_current_session_id)
+            sid = chat_create_session('web', "")
+            self.web_current_session_id = sid
+            self._refresh_web_sessions(select_id=sid)
+            self.clear_chat()
+
+    def _on_web_clear_messages(self):
+        if not self.web_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Clear Messages", "Clear all messages in this session?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_clear_session_messages(self.web_current_session_id)
+            self.clear_chat()
+
+    def _load_web_session_messages(self, session_id: int):
+        self.clear_chat()
+        self._web_restoring = True
+        try:
+            msgs = chat_list_messages(session_id)
+            for m in msgs:
+                is_user = (m['role'] == 'user')
+                self.add_message(m['content'], is_user)
+        finally:
+            self._web_restoring = False
 
     def toggle_voice_input(self):
         """Toggle voice input for web agent"""
@@ -2320,6 +2941,7 @@ class WebAgentTab(QWidget):
                     border-radius: 5px;
                     padding: 0px;
                     margin: 0px;
+
                     font-size: 16px;
                 }
                 QPushButton:hover {
@@ -2406,12 +3028,21 @@ class WebAgentTab(QWidget):
         """)
 
     def clear_chat(self):
-        """Clear all messages from the chat area"""
+        """Clear all messages from the chat area and reset conversation history."""
         # Remove all message bubbles
         while self.chat_area.layout.count():
             child = self.chat_area.layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+        # Also clear in-memory conversation history used for context
+        try:
+            if hasattr(self, "chat_history") and isinstance(self.chat_history, list):
+                self.chat_history.clear()
+            else:
+                self.chat_history = []
+        except Exception:
+            self.chat_history = []
 
     def handle_voice_text(self, text):
         """Handle text received from voice recognition"""
@@ -2793,7 +3424,8 @@ class RPATab(QWidget):
             # Start execution thread
             self.execution_thread = threading.Thread(
                 target=self.execute_action_sequence,
-                args=(actions,)
+                args=(actions,),
+                daemon=True
             )
             self.execution_thread.start()
 
@@ -4812,12 +5444,34 @@ class MiniControlInterface(QWidget):
 
 def create_app():
     load_settings()
+
+    # Enforce single-instance using a lock file + local server to activate existing instance
+    lock_path = os.path.join(tempfile.gettempdir(), 'ComputerAutopilot.lock')
+    app_lock = QLockFile(lock_path)
+    app_lock.setStaleLockTime(0)
+    if not app_lock.tryLock(1):
+        # Another instance is running; try to activate it and exit
+        try:
+            sock = QLocalSocket()
+            sock.connectToServer('ComputerAutopilotInstance')
+            if sock.waitForConnected(200):
+                sock.write(b'activate')
+                sock.flush()
+                sock.waitForBytesWritten(200)
+            sock.disconnectFromServer()
+        except Exception:
+            pass
+        sys.exit(0)
+
     app = QApplication([])
 
     # Set app ID for Windows taskbar icon
     if os.name == 'nt':  # Windows
         myappid = 'mycompany.computerautopilot.desktop.v1'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
 
     # Set application-wide icon
     app_icon = QIcon("media/icon.png")
@@ -4825,6 +5479,45 @@ def create_app():
 
     window = ModernChatInterface()
     window.show()
+
+    # Local server to receive activation requests from subsequent launches
+    server = QLocalServer()
+    server_name = 'ComputerAutopilotInstance'
+    try:
+        # Clean up any stale server
+        QLocalServer.removeServer(server_name)
+        server.listen(server_name)
+    except Exception:
+        try:
+            QLocalServer.removeServer(server_name)
+            server.listen(server_name)
+        except Exception:
+            pass
+
+    def _on_new_conn():
+        try:
+            s = server.nextPendingConnection()
+            if s is not None:
+                # best-effort read; not strictly needed
+                s.waitForReadyRead(50)
+                try:
+                    if hasattr(window, 'restore_from_tray'):
+                        window.restore_from_tray()
+                    else:
+                        window.showNormal()
+                        window.raise_()
+                        window.activateWindow()
+                except Exception:
+                    pass
+                s.close()
+        except Exception:
+            pass
+
+    server.newConnection.connect(_on_new_conn)
+
+    # Ensure lock is released on quit
+    app.aboutToQuit.connect(lambda: app_lock.unlock())
+
     set_app_instance(window)
     app.exec()
 
