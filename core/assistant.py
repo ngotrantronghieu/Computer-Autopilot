@@ -1,3 +1,26 @@
+import tiktoken
+
+class DummyEncoding:
+    name = "dummy"
+    def encode(self, text):
+        return text.split()
+    def decode(self, tokens):
+        # Join tokens with a space.
+        return " ".join(tokens)
+
+_orig_get_encoding = tiktoken.get_encoding
+
+def patched_get_encoding(name):
+    # When "cl100k_base" or "gpt2" is requested, return our dummy encoding.
+    if name in ("cl100k_base", "gpt2"):
+        return DummyEncoding()
+    return _orig_get_encoding(name)
+
+tiktoken.get_encoding = patched_get_encoding
+
+# Force initialization (this now returns the dummy encoding).
+tiktoken.get_encoding("cl100k_base")
+
 import speech_recognition as sr
 import threading
 import json
@@ -18,9 +41,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton,
                               QTextEdit, QDialogButtonBox, QMessageBox, QSystemTrayIcon, QMenu,
                               QListWidget, QComboBox, QStackedWidget, QSpinBox,
                               QDoubleSpinBox, QListWidgetItem, QGroupBox, QTimeEdit,
-                              QDateEdit, QInputDialog)
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG, QTime, QDate, QLocale, QDateTime, QLockFile
-from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence, QAction
+                              QDateEdit, QInputDialog, QGraphicsDropShadowEffect, QToolButton)
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG, QTime, QDate, QLocale, QDateTime, QLockFile, QTimer
+from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence, QAction, QColor
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from voice import speaker, set_volume, set_subtitles
 from driver import (
@@ -52,7 +75,8 @@ def load_settings():
         "max_attempts": 20,
         "web_action_delay": 1.5,
         "web_max_attempts": 20,
-        "start_with_windows": False
+        "start_with_windows": False,
+        "mini_chat_opacity": 0.9
     }
 
     try:
@@ -763,6 +787,23 @@ class SettingsDialog(QDialog):
         web_layout.addStretch()
 
         right_layout.addWidget(web_group)
+        # Mini Chat settings
+        mini_group = QFrame()
+        mini_group.setObjectName("settingsGroup")
+        mini_layout = QVBoxLayout(mini_group)
+        mini_layout.addWidget(QLabel("Mini Chat"))
+
+        opacity_container = QWidget()
+        opacity_layout = QHBoxLayout(opacity_container)
+        opacity_layout.addWidget(QLabel("Opacity (%):"))
+        self.mini_chat_opacity_slider = QSlider(Qt.Horizontal)
+        self.mini_chat_opacity_slider.setRange(50, 100)
+        self.mini_chat_opacity_slider.setValue(90)
+        opacity_layout.addWidget(self.mini_chat_opacity_slider)
+        mini_layout.addWidget(opacity_container)
+
+        right_layout.addWidget(mini_group)
+
         right_layout.addStretch()
 
         # Add panels to main layout with better proportions
@@ -1247,6 +1288,8 @@ class VoiceHandler(QObject):
     textReceived = Signal(str)
 
 class ModernChatInterface(QMainWindow):
+    messageReceived = Signal(str, bool)
+
     def __init__(self):
         super().__init__()
 
@@ -1283,6 +1326,9 @@ class ModernChatInterface(QMainWindow):
 
         # Chat area
         self.chat_area = ChatArea()
+        # Connect thread-safe message signal to chat UI
+        self.messageReceived.connect(self.add_message)
+
         layout.addWidget(self.chat_area)
 
         # In-memory chat history (list of {role, content}) for conversation context
@@ -1405,7 +1451,9 @@ class ModernChatInterface(QMainWindow):
         # Create mini chat interface
         self.mini_chat = MiniChatInterface(self)
         self.mini_chat.input_field.returnPressed.connect(self.handle_mini_chat_input)
-        self.mini_chat.voice_button.clicked.connect(self.toggle_voice_input)
+        self.mini_chat.voice_button.clicked.connect(self.toggle_mini_chat_voice_input)
+        self.mini_chat.send_button.clicked.connect(self.handle_mini_chat_input)
+
 
         # Create mini control interface
         self.mini_control = MiniControlInterface(self)
@@ -1557,6 +1605,12 @@ class ModernChatInterface(QMainWindow):
                     self.mini_control.show()
                     self.update_mini_control()
                 else:
+                    try:
+                        src = 'web' if self.tab_widget.currentIndex() == 1 else 'chat'
+                        if hasattr(self, 'mini_chat'):
+                            self.mini_chat.set_source(src)
+                    except Exception:
+                        pass
                     self.mini_chat.show()
             else:
                 self.mini_chat.hide()
@@ -1570,6 +1624,25 @@ class ModernChatInterface(QMainWindow):
             self.mini_chat.input_field.clear()
             # Process message without restoring main window
             self.process_mini_chat_message(message)
+
+
+    def toggle_mini_chat_voice_input(self):
+        """Route mini chat mic to current context: Web Agent tab if active, else main chat."""
+        try:
+            # If Web Agent tab (index 1) is active, route voice to it
+            if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == 1:
+                web_tab = self.tab_widget.widget(1)
+                if web_tab and hasattr(web_tab, "toggle_voice_input"):
+                    web_tab.toggle_voice_input()
+                    # Reflect state on mini chat mic
+                    self.mini_chat.update_voice_button_state(getattr(web_tab, "voice_active", False))
+                    return
+        except Exception:
+            pass
+
+        # Fallback: use main chat voice handler
+        self.toggle_voice_input()
+        self.mini_chat.update_voice_button_state(getattr(self, "voice_active", False))
 
     def process_mini_chat_message(self, message):
         """Process message from mini chat without restoring main window"""
@@ -1648,6 +1721,12 @@ class ModernChatInterface(QMainWindow):
         """Add a message bubble to the chat area and store in chat history"""
         bubble = MessageBubble(message, is_user)
         self.chat_area.layout.addWidget(bubble)
+        # Mirror to mini chat compact view only if mini source is 'chat'
+        try:
+            if hasattr(self, "mini_chat") and getattr(self.mini_chat, "source", "chat") == "chat":
+                self.mini_chat.add_message_small(str(message), is_user)
+        except Exception:
+            pass
 
         # Update in-memory chat history for context building
         role = "user" if is_user else "assistant"
@@ -1987,6 +2066,35 @@ class ModernChatInterface(QMainWindow):
                     Qt.ConnectionType.QueuedConnection
                 )
 
+    @Slot()
+    def reset_voice_button(self):
+        """Reset voice button style - thread-safe method (main + mini chat)"""
+        try:
+            self.voice_button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #2196F3;
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0px;
+                    margin: 0px;
+                    font-size: 16px;
+                }
+                QPushButton:hover {
+                    background-color: #1976D2;
+                }
+                """
+            )
+        except Exception:
+            pass
+        # Also reset mini chat mic appearance if available
+        try:
+            if hasattr(self, "mini_chat") and hasattr(self.mini_chat, "update_voice_button_state"):
+                self.mini_chat.update_voice_button_state(False)
+        except Exception:
+            pass
+
     def handle_voice_text(self, text):
         """Handle voice recognition text in the main thread"""
         self.input_field.setText(text)
@@ -2030,6 +2138,12 @@ class ModernChatInterface(QMainWindow):
             dialog.web_action_delay_spin.setValue(settings.get("web_action_delay"))
         if "web_max_attempts" in settings:
             dialog.web_max_attempts_spin.setValue(settings.get("web_max_attempts"))
+        # Initialize mini chat opacity slider if present
+        try:
+            if hasattr(dialog, "mini_chat_opacity_slider"):
+                dialog.mini_chat_opacity_slider.setValue(int(float(settings.get("mini_chat_opacity", 0.9)) * 100))
+        except Exception:
+            pass
 
         # If dialog is accepted, save settings
         if dialog.exec() == QDialog.Accepted:
@@ -2058,7 +2172,8 @@ class ModernChatInterface(QMainWindow):
                 "max_attempts": dialog.max_attempts_spin.value(),
                 "web_action_delay": dialog.web_action_delay_spin.value(),
                 "web_max_attempts": dialog.web_max_attempts_spin.value(),
-                "start_with_windows": dialog.startup_check.isChecked()
+                "start_with_windows": dialog.startup_check.isChecked(),
+                "mini_chat_opacity": (dialog.mini_chat_opacity_slider.value() / 100.0) if hasattr(dialog, "mini_chat_opacity_slider") else settings.get("mini_chat_opacity", 0.9)
             }
 
             # Set API credentials
@@ -2080,6 +2195,13 @@ class ModernChatInterface(QMainWindow):
                     "Error",
                     f"Error saving settings: {str(e)}"
                 )
+
+            # Apply live changes to mini chat
+            try:
+                if hasattr(self, "mini_chat"):
+                    self.mini_chat.setWindowOpacity(float(new_settings.get("mini_chat_opacity", 0.9)))
+            except Exception:
+                pass
 
     def update_mini_control(self):
         """Update mini control interface state"""
@@ -2127,6 +2249,14 @@ class ModernChatInterface(QMainWindow):
                 # Start execution of selected task
                 rpa_tab.execute_selected_task()
             self.update_mini_control()
+
+    def handle_mini_control_stop(self):
+        """Handle stop button click for mini control interface"""
+        rpa_tab = self.tab_widget.widget(2)  # RPA tab is now index 2
+        if rpa_tab:
+            rpa_tab.stop_execution()
+            self.update_mini_control()
+
     # --- Desktop chat session management ---
     def _init_desktop_sessions(self):
         """Start with a fresh session and load sessions list (preference 3.B)."""
@@ -2240,13 +2370,6 @@ class ModernChatInterface(QMainWindow):
         finally:
             self._desktop_restoring = False
 
-    def handle_mini_control_stop(self):
-        """Handle stop button click for mini control interface"""
-        rpa_tab = self.tab_widget.widget(2)  # RPA tab is now index 2
-        if rpa_tab:
-            rpa_tab.stop_execution()
-            self.update_mini_control()
-
     def clear_chat(self):
         """Clear all messages from the chat area and reset conversation history."""
         # Remove all message bubbles
@@ -2325,7 +2448,7 @@ class MiniChatInterface(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setWindowTitle("")
-        self.setFixedSize(300, 60)
+        self.setFixedWidth(300)
 
         # Position at bottom right
         screen = QApplication.primaryScreen().geometry()
@@ -2335,9 +2458,60 @@ class MiniChatInterface(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        # Enable translucent background for smooth rounded corners
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        # Inner card with shadow
+        card = QFrame()
+        card.setObjectName("miniCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 4)
+        try:
+            shadow.setColor(QColor(0, 0, 0, 80))
+        except Exception:
+            pass
+        card.setGraphicsEffect(shadow)
+        # Collapsible header + small conversation area
+        self.expanded = False
+        self.header_container = QWidget()
+        header_layout = QHBoxLayout(self.header_container)
+        header_layout.setContentsMargins(0, 0, 0, 4)
+        self.toggle_btn = QToolButton()
+        self.toggle_btn.setText("▸")
+        self.toggle_btn.setToolTip("Show conversation")
+        self.toggle_btn.clicked.connect(self.toggle_conversation)
+        header_layout.addWidget(self.toggle_btn)
+        header_layout.addStretch()
+        card_layout.addWidget(self.header_container)
+
+        # Small conversation scroll area (hidden by default)
+        self.small_scroll = QScrollArea()
+        self.small_scroll.setWidgetResizable(True)
+        self.small_scroll.setFixedHeight(120)
+        small_container = QWidget()
+        self.small_chat_layout = QVBoxLayout(small_container)
+        self.small_chat_layout.setContentsMargins(0, 0, 0, 0)
+        self.small_chat_layout.setSpacing(4)
+        self.small_chat_layout.addStretch()
+        self.small_scroll.setWidget(small_container)
+        self.small_scroll.setVisible(False)
+        card_layout.addWidget(self.small_scroll)
+
+        # Apply opacity from settings
+        try:
+            _s = load_settings()
+            self.setWindowOpacity(float(_s.get("mini_chat_opacity", 0.9)))
+        except Exception:
+            pass
+
+
         # Input container
-        input_container = QWidget()
-        input_layout = QHBoxLayout(input_container)
+        self.input_container = QWidget()
+        input_layout = QHBoxLayout(self.input_container)
         input_layout.setContentsMargins(0, 0, 0, 0)
 
         self.input_field = QLineEdit()
@@ -2355,26 +2529,36 @@ class MiniChatInterface(QWidget):
         self.voice_button.setStyleSheet(self.get_voice_button_style(False))
         input_layout.addWidget(self.voice_button)
 
-        layout.addWidget(input_container)
+        # Send button
+        self.send_button = QPushButton("➤")
+        self.send_button.setFixedSize(30, 30)
+        self.send_button.setToolTip("Send")
+        input_layout.addWidget(self.send_button)
+
+        card_layout.addWidget(self.input_container)
+        layout.addWidget(card)
 
         # Style
         self.setStyleSheet("""
-            QWidget {
+            QWidget#miniCard {
                 background-color: #FFFFFF;
-                border: 1px solid #CCCCCC;
-                border-radius: 5px;
+                border-radius: 12px;
             }
             QLineEdit {
-                border: 1px solid #CCCCCC;
-                border-radius: 3px;
-                padding: 5px;
+                border: 1px solid #D9D9D9;
+                border-radius: 16px;
+                padding: 6px 10px;
+                background: #FFFFFF;
             }
-
+            QLineEdit:focus {
+                border: 1px solid #1976D2;
+                background: #F7F9FC;
+            }
             QPushButton {
                 background-color: #2196F3;
                 color: white;
                 border: none;
-                border-radius: 3px;
+                border-radius: 15px;
                 padding: 0px;
                 margin: 0px;
                 font-size: 14px;
@@ -2383,6 +2567,155 @@ class MiniChatInterface(QWidget):
                 background-color: #1976D2;
             }
         """)
+        # Adjust initial height based on content
+        try:
+            self._update_height_for_state()
+        except Exception:
+            pass
+
+
+    def toggle_conversation(self):
+        """Collapse/expand the small conversation area."""
+        try:
+            self.expanded = not getattr(self, "expanded", False)
+            self.small_scroll.setVisible(self.expanded)
+            self.toggle_btn.setText("▾" if self.expanded else "▸")
+            self.toggle_btn.setToolTip("Hide conversation" if self.expanded else "Show conversation")
+            # Recompute height based on content
+            self._update_height_for_state()
+            # Ensure conversation area scrolled to bottom when expanded
+            if self.expanded:
+                try:
+                    sb = self.small_scroll.verticalScrollBar()
+                    QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def add_message_small(self, message, is_user=True):
+        """Add a compact message row to the mini chat conversation view."""
+        try:
+            # Ensure layout ends with a stretch; compute insert index before it
+            count = self.small_chat_layout.count()
+            insert_index = max(0, count - 1)
+
+            # Cap to last 10 items (excluding the stretch at the end)
+            max_items = 10
+            current_items = max(0, count - 1)
+            while current_items >= max_items:
+                item = self.small_chat_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+                current_items -= 1
+
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(4)
+
+            lbl = QLabel(str(message))
+            lbl.setWordWrap(True)
+            bubble_bg = "#E3F2FD" if is_user else "#F1F3F4"
+            lbl.setStyleSheet(f"background-color: {bubble_bg}; border-radius: 8px; padding: 4px 8px; color: #111;")
+
+            if is_user:
+                hl.addStretch()
+
+                hl.addWidget(lbl)
+            else:
+                hl.addWidget(lbl)
+                hl.addStretch()
+
+            self.small_chat_layout.insertWidget(insert_index, row)
+
+            # Auto scroll to bottom (even if currently hidden)
+            try:
+                sb = self.small_scroll.verticalScrollBar()
+                QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+    def set_source(self, source: str):
+        """Set which conversation source to mirror: 'chat' or 'web'. Rebuild view."""
+        try:
+            self.source = 'web' if str(source).lower().startswith('w') else 'chat'
+            main = get_app_instance()
+            history = []
+            if main:
+                if self.source == 'web':
+                    web_tab = main.tab_widget.widget(1) if hasattr(main, 'tab_widget') else None
+                    history = getattr(web_tab, 'chat_history', []) or []
+                else:
+                    history = getattr(main, 'chat_history', []) or []
+            self._rebuild_small_from(history)
+        except Exception:
+            pass
+
+    def _rebuild_small_from(self, history):
+        """Rebuild the mini conversation area from the provided history list of dicts."""
+        try:
+            # Remove all widgets except the final stretch
+            # Collect items to remove first to avoid index issues
+            items_to_remove = []
+            for i in range(self.small_chat_layout.count() - 1):  # exclude last stretch
+                items_to_remove.append(self.small_chat_layout.itemAt(i))
+            for item in items_to_remove:
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+                    w.deleteLater()
+                self.small_chat_layout.removeItem(item)
+
+            # Add last up to 10 messages
+            last_msgs = history[-10:]
+            for msg in last_msgs:
+                role = msg.get('role', 'assistant')
+                content = str(msg.get('content', ''))
+                self.add_message_small(content, is_user=(role == 'user'))
+
+            # Ensure scroll bottom when rebuilt
+            try:
+                sb = self.small_scroll.verticalScrollBar()
+                QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _update_height_for_state(self):
+        """Compute and set window height based on current expanded/collapsed state.
+        Keep the bottom edge anchored so expand/collapse grows upward.
+        """
+        try:
+            # Capture current geometry to preserve bottom edge
+            g = self.geometry()
+            bottom = g.y() + g.height()
+
+            header_h = self.header_container.sizeHint().height() if hasattr(self, 'header_container') else 0
+            input_h = self.input_container.sizeHint().height() if hasattr(self, 'input_container') else 0
+
+            # Add generous padding for card + outer margins and spacing
+            base_padding = 32
+            total = header_h + input_h + base_padding
+            if getattr(self, 'expanded', False):
+                total += self.small_scroll.height()
+
+            # Ensure collapsed state has enough room for full input row
+            new_h = max(100, total)
+            self.setFixedHeight(new_h)
+
+            # Reposition so bottom edge stays fixed (grow upwards)
+            new_y = bottom - self.height()
+            self.move(g.x(), new_y)
+        except Exception:
+            pass
+
+
 
         # Make window draggable
         self.oldPos = None
@@ -2404,7 +2737,7 @@ class MiniChatInterface(QWidget):
                 background-color: {color};
                 color: white;
                 border: none;
-                border-radius: 3px;
+                border-radius: 15px;
                 padding: 0px;
                 margin: 0px;
                 font-size: 14px;
@@ -2633,6 +2966,13 @@ class WebAgentTab(QWidget):
         """Add a message bubble to the chat area and store in chat history"""
         bubble = MessageBubble(message, is_user)
         self.chat_area.layout.addWidget(bubble)
+        # Mirror to mini chat compact view (via main window) only if mini source is 'web'
+        try:
+            main_window = get_app_instance()
+            if main_window and hasattr(main_window, "mini_chat") and getattr(main_window.mini_chat, "source", "chat") == "web":
+                main_window.mini_chat.add_message_small(str(message), is_user)
+        except Exception:
+            pass
 
         # Update in-memory chat history for context building
         role = "user" if is_user else "assistant"
@@ -2678,6 +3018,109 @@ class WebAgentTab(QWidget):
         except Exception:
             return ""
 
+    # --- Web chat session management ---
+    def _init_web_sessions(self):
+        sid = chat_create_session('web', "")
+        self.web_current_session_id = sid
+        self._refresh_web_sessions(select_id=sid)
+
+    def _refresh_web_sessions(self, select_id=None):
+        sessions = chat_list_sessions('web')
+        self.web_session_combo.blockSignals(True)
+        self.web_session_combo.clear()
+        for sess in sessions:
+            label_name = sess['name'] if sess['name'] else 'New chat'
+            dt_str = _format_session_timestamp(sess.get('created_at'))
+            label = f"{label_name} — {dt_str}" if dt_str else label_name
+            self.web_session_combo.addItem(label, sess['id'])
+        self.web_session_combo.blockSignals(False)
+        if select_id is not None:
+            for i in range(self.web_session_combo.count()):
+                if self.web_session_combo.itemData(i) == select_id:
+                    self.web_session_combo.setCurrentIndex(i)
+                    break
+
+    def _delete_web_session_if_empty(self, session_id: int) -> bool:
+        try:
+            if not session_id:
+                return False
+            msgs = chat_list_messages(session_id)
+            if not msgs:
+                chat_delete_session(session_id)
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _on_web_session_changed(self, index):
+        if index < 0:
+            return
+        new_id = self.web_session_combo.itemData(index)
+        if not new_id or new_id == self.web_current_session_id:
+            return
+        old_id = getattr(self, 'web_current_session_id', None)
+        if old_id and old_id != new_id:
+            if self._delete_web_session_if_empty(old_id):
+                self._refresh_web_sessions(select_id=new_id)
+        self.web_current_session_id = new_id
+        self._load_web_session_messages(new_id)
+
+    def _on_web_new_session(self):
+        curr_id = getattr(self, 'web_current_session_id', None)
+        if curr_id:
+            self._delete_web_session_if_empty(curr_id)
+        sid = chat_create_session('web', "")
+        self.web_current_session_id = sid
+        self._refresh_web_sessions(select_id=sid)
+        self.clear_chat()
+
+    def _on_web_rename_session(self):
+        if not self.web_current_session_id:
+            return
+        current_name = ""
+        try:
+            for sess in chat_list_sessions('web'):
+                if sess['id'] == self.web_current_session_id:
+                    current_name = sess.get('name') or ""
+                    break
+        except Exception:
+            pass
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Session", "New name:", QLineEdit.Normal, current_name
+        )
+        if ok and new_name.strip():
+            chat_rename_session(self.web_current_session_id, new_name.strip())
+            self._refresh_web_sessions(select_id=self.web_current_session_id)
+
+    def _on_web_delete_session(self):
+        if not self.web_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Delete Session", "Delete this session and all messages?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_delete_session(self.web_current_session_id)
+            sid = chat_create_session('web', "")
+            self.web_current_session_id = sid
+            self._refresh_web_sessions(select_id=sid)
+            self.clear_chat()
+
+    def _on_web_clear_messages(self):
+        if not self.web_current_session_id:
+            return
+        confirm = QMessageBox.question(self, "Clear Messages", "Clear all messages in this session?", QMessageBox.Yes|QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            chat_clear_session_messages(self.web_current_session_id)
+            self.clear_chat()
+
+    def _load_web_session_messages(self, session_id: int):
+        self.clear_chat()
+        self._web_restoring = True
+        try:
+            msgs = chat_list_messages(session_id)
+            for m in msgs:
+                is_user = (m['role'] == 'user')
+                self.add_message(m['content'], is_user)
+        finally:
+            self._web_restoring = False
 
     def handle_send_stop(self):
         """Handle send/stop button click based on current state"""
@@ -2824,109 +3267,6 @@ class WebAgentTab(QWidget):
             self.add_message(result, is_user=False)
             speaker(result)
 
-    # --- Web chat session management ---
-    def _init_web_sessions(self):
-        sid = chat_create_session('web', "")
-        self.web_current_session_id = sid
-        self._refresh_web_sessions(select_id=sid)
-
-    def _refresh_web_sessions(self, select_id=None):
-        sessions = chat_list_sessions('web')
-        self.web_session_combo.blockSignals(True)
-        self.web_session_combo.clear()
-        for sess in sessions:
-            label_name = sess['name'] if sess['name'] else 'New chat'
-            dt_str = _format_session_timestamp(sess.get('created_at'))
-            label = f"{label_name} — {dt_str}" if dt_str else label_name
-            self.web_session_combo.addItem(label, sess['id'])
-        self.web_session_combo.blockSignals(False)
-        if select_id is not None:
-            for i in range(self.web_session_combo.count()):
-                if self.web_session_combo.itemData(i) == select_id:
-                    self.web_session_combo.setCurrentIndex(i)
-                    break
-
-    def _delete_web_session_if_empty(self, session_id: int) -> bool:
-        try:
-            if not session_id:
-                return False
-            msgs = chat_list_messages(session_id)
-            if not msgs:
-                chat_delete_session(session_id)
-                return True
-            return False
-        except Exception:
-            return False
-
-    def _on_web_session_changed(self, index):
-        if index < 0:
-            return
-        new_id = self.web_session_combo.itemData(index)
-        if not new_id or new_id == self.web_current_session_id:
-            return
-        old_id = getattr(self, 'web_current_session_id', None)
-        if old_id and old_id != new_id:
-            if self._delete_web_session_if_empty(old_id):
-                self._refresh_web_sessions(select_id=new_id)
-        self.web_current_session_id = new_id
-        self._load_web_session_messages(new_id)
-
-    def _on_web_new_session(self):
-        curr_id = getattr(self, 'web_current_session_id', None)
-        if curr_id:
-            self._delete_web_session_if_empty(curr_id)
-        sid = chat_create_session('web', "")
-        self.web_current_session_id = sid
-        self._refresh_web_sessions(select_id=sid)
-        self.clear_chat()
-
-    def _on_web_rename_session(self):
-        if not self.web_current_session_id:
-            return
-        current_name = ""
-        try:
-            for sess in chat_list_sessions('web'):
-                if sess['id'] == self.web_current_session_id:
-                    current_name = sess.get('name') or ""
-                    break
-        except Exception:
-            pass
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Session", "New name:", QLineEdit.Normal, current_name
-        )
-        if ok and new_name.strip():
-            chat_rename_session(self.web_current_session_id, new_name.strip())
-            self._refresh_web_sessions(select_id=self.web_current_session_id)
-
-    def _on_web_delete_session(self):
-        if not self.web_current_session_id:
-            return
-        confirm = QMessageBox.question(self, "Delete Session", "Delete this session and all messages?", QMessageBox.Yes|QMessageBox.No)
-        if confirm == QMessageBox.Yes:
-            chat_delete_session(self.web_current_session_id)
-            sid = chat_create_session('web', "")
-            self.web_current_session_id = sid
-            self._refresh_web_sessions(select_id=sid)
-            self.clear_chat()
-
-    def _on_web_clear_messages(self):
-        if not self.web_current_session_id:
-            return
-        confirm = QMessageBox.question(self, "Clear Messages", "Clear all messages in this session?", QMessageBox.Yes|QMessageBox.No)
-        if confirm == QMessageBox.Yes:
-            chat_clear_session_messages(self.web_current_session_id)
-            self.clear_chat()
-
-    def _load_web_session_messages(self, session_id: int):
-        self.clear_chat()
-        self._web_restoring = True
-        try:
-            msgs = chat_list_messages(session_id)
-            for m in msgs:
-                is_user = (m['role'] == 'user')
-                self.add_message(m['content'], is_user)
-        finally:
-            self._web_restoring = False
 
     def toggle_voice_input(self):
         """Toggle voice input for web agent"""
@@ -2947,6 +3287,14 @@ class WebAgentTab(QWidget):
                     background-color: #D32F2F;
                 }
             """)
+            # Reflect state on mini chat mic
+            try:
+                main_window = get_app_instance()
+                if main_window and hasattr(main_window, "mini_chat"):
+                    main_window.mini_chat.update_voice_button_state(True)
+            except Exception:
+                pass
+
             # Start listening using the existing voice_handler
             threading.Thread(target=self.listen_voice, daemon=True).start()
         else:
@@ -2965,6 +3313,14 @@ class WebAgentTab(QWidget):
                     background-color: #1976D2;
                 }
             """)
+            # Reflect state on mini chat mic
+            try:
+                main_window = get_app_instance()
+                if main_window and hasattr(main_window, "mini_chat"):
+                    main_window.mini_chat.update_voice_button_state(False)
+            except Exception:
+                pass
+
 
     def listen_voice(self):
         """Listen for voice input and convert to text"""
@@ -2980,6 +3336,7 @@ class WebAgentTab(QWidget):
                     current_language = 'vi'
                     main_window = get_app_instance()
                     if main_window:
+
                         main_window.current_language = current_language
                 except:
                     text = recognizer.recognize_google(audio, language='en-US')
@@ -3007,6 +3364,14 @@ class WebAgentTab(QWidget):
                     "reset_voice_button",
                     Qt.ConnectionType.QueuedConnection
                 )
+        # Also update mini chat voice button state
+        try:
+            main_window = get_app_instance()
+            if main_window and hasattr(main_window, "mini_chat"):
+                main_window.mini_chat.update_voice_button_state(False)
+        except Exception:
+            pass
+
 
     @Slot()
     def reset_voice_button(self):
