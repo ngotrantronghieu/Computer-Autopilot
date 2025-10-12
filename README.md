@@ -7,7 +7,6 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 
 <img width="1252" height="914" alt="image" src="https://github.com/user-attachments/assets/8ae3e9c2-9dac-4a3a-ae00-ef50c941664b" />
 
-<img width="375" height="125" alt="image" src="https://github.com/user-attachments/assets/a080638f-c4d2-4790-8307-366cb8e7123a" />
 
 # Overview
 - Natural language control of your Windows Operating System
