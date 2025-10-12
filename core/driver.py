@@ -37,6 +37,18 @@ action_cache = {}
 _sb_instance = None
 _driver = None
 
+
+# MCP integration globals
+mcp_recent_results = []  # list[str] of full result summaries for prompt context
+mcp_discovered_tools_cache = {}  # sid -> list[str] of discovered tool names (session cache)
+mcp_discovered_tools_meta_cache = {}  # sid -> list[dict] full tool metadata (name, description)
+
+try:
+    from mcp_client import call_mcp_tool, list_mcp_tools as _list_mcp_tools_sync
+except Exception:
+    call_mcp_tool = None  # will handle missing dependency at call time
+    _list_mcp_tools_sync = None
+
 def request_stop():
     global _stop_requested
     _stop_requested = True
@@ -319,6 +331,49 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
     else:
         focused_window_info = "Focused Window Details: There are no details about the focused window."
 
+    # MCP integration context
+    settings = get_settings()
+    mcp_servers = settings.get("mcp_servers", []) if isinstance(settings, dict) else []
+
+    # Build detailed tool descriptions per server
+    mcp_details_lines = []
+    for s in mcp_servers:
+        sid = s.get("id") or s.get("name") or "(no-id)"
+        meta = mcp_discovered_tools_meta_cache.get(sid)
+        if not meta and _list_mcp_tools_sync is not None:
+            try:
+                cfg = {"command": s.get("command", ""), "args": s.get("args") or [], "env": s.get("env") or None}
+                if cfg["command"]:
+                    meta = _list_mcp_tools_sync(cfg, timeout=8.0)
+                    if isinstance(meta, list) and meta:
+                        mcp_discovered_tools_meta_cache[sid] = meta
+                        names = [t.get("name") for t in meta if isinstance(t, dict) and t.get("name")]
+                        if names:
+                            mcp_discovered_tools_cache[sid] = names
+            except Exception:
+                meta = None
+        mcp_details_lines.append(f"- {sid}:")
+        if meta:
+            for t in meta:
+                if isinstance(t, dict):
+                    name = t.get("name") or ""
+                    desc = t.get("description") or ""
+                    if name:
+                        mcp_details_lines.append(f"  - {name} — {desc}" if desc else f"  - {name}")
+        else:
+            tools_cfg = s.get("allowed_tools") or []
+            names = [t.get("name") if isinstance(t, dict) else str(t) for t in tools_cfg]
+            if names:
+                for nm in names:
+                    mcp_details_lines.append(f"  - {nm}")
+            else:
+                mcp_details_lines.append("  (no tools available)")
+    mcp_tools_details = "\n".join(mcp_details_lines) if mcp_details_lines else "(No MCP servers configured)"
+
+    # Recent MCP results (full, untruncated)
+    recent = mcp_recent_results if isinstance(mcp_recent_results, list) else []
+    mcp_recent_results_formatted = "\n".join(recent) if recent else "(No recent MCP results)"
+
     return (
         f"You are an AI Agent called Computer Autopilot that is capable of operating freely on Windows by generating actions in sequence to accomplish the user's goal."
         f"Below is a goal that the user wants to achieve, a screenshot of the user's current Windows screen along with the previous actions you've performed. Based on these:\n"
@@ -333,11 +388,12 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- For any action, provide an action description explaining the exact details related to that action.\n"
         f"- For any mouse action, provide the coordinates at the center of the element to interact with in x and y based on the screenshot, the screen resolution and the additional contexts. For other actions, don't include the coordinates in the JSON.\n"
         f"- Specify the number of repeats needed for action that requires multiple repeats. If not specified, the action will be performed only once.\n"
-        f"3. Special case: If the goal is a general informational request that does not require performing any actions on Windows/apps, respond to the request directly (you may use the current screen information and UI analysis below as helpful context). In this case, set TASK_COMPLETED: Yes and ONLY provide the RESPONSE_MESSAGE. DO NOT include NEXT_ACTION in your response.\n\n"
+        f"3. If the goal is a general informational request that does not require performing any actions on the computer, respond to the request directly (you may use the current screen information and the UI analysis as helpful context). In this case, set TASK_COMPLETED: Yes and ONLY provide the RESPONSE_MESSAGE. DO NOT include NEXT_ACTION in your response.\n"
+        f"4. If the goal has been achieved (TASK_COMPLETED: Yes), provide a friendly response message telling the user that the goal has been achieved and a summary of the results if needed. In this case, set TASK_COMPLETED: Yes and ONLY provide the RESPONSE_MESSAGE. DO NOT include NEXT_ACTION in your response.\n\n"
         f"Respond in the following format:\n"
         f"TASK_COMPLETED: <Yes/No>\n"
         f"RESPONSE_MESSAGE: <A friendly response message related to what you're doing>\n"
-        f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action> (omit this field entirely when the goal is a general request and no action is required)\n\n"
+        f"NEXT_ACTION: <If not completed/paused/stopped, provide a JSON with only ONE next action> (omit this section entirely when no action is required)\n\n"
         f"JSON format for next action:\n"
         f"{{\n"
         f"    \"action\": [\n"
@@ -362,7 +418,10 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"- open_app: The name of the application to open or focus on.\n"
         f"- time_sleep: The duration to wait for in seconds.\n"
         f"- execute_rpa_task: The name of the RPA task to execute. (Use this action to execute a saved RPA task created by the user. Only use this action if the user asks you to do so.)\n"
-        f"{rpa_context}\n\n"
+        f"{rpa_context}\n"
+        f"- mcp_call: The server ID, tool name, optional args (object) and optional timeout (in seconds) of a MCP server. (Use this action to call a tool from a MCP server.)\n"
+        f"mcp_call action format: \"act\":\"mcp_call\", \"detail\":\"{{\"server\":\"<server_id>\",\"tool\":\"<tool_name>\",\"args\":<args_object>,\"timeout\":<timeout_sec>}}\" (args and timeout are optional)\n"
+        f"MCP servers and tools details:\n{mcp_tools_details}\n\n"
         f"Important Rules:\n"
         f"1. In the action description, provide ONLY the exact information related to each action type specified above without any additional text.\n"
         f"2. Generate action based primarily on the current status of the task completion progress being shown within the screenshot and only relate to the previous actions for additional contexts."
@@ -374,12 +433,13 @@ def create_action_context(goal, executed_actions, app_context, keyboard_shortcut
         f"7. Always prioritize using a press_key action if it can replace a mouse action that results in the same outcome.\n\n"
         f"Here is the goal the user wants to achieve: {goal}\n"
         f"Previous actions you've performed:{f'\n{previous_actions}' if previous_actions else ' There are no previous actions performed.'}\n\n"
+        f"Recent MCP Results:\n{mcp_recent_results_formatted}\n"
         f"Additional contexts:\n"
         f"{screen_info}\n\n"
         f"{focused_window_info}\n\n"
         f"{f'{ui_elements}\n\n' if ui_elements else ''}"
         f"{cursor_info}\n\n"
-        f"Here are lists of all programs on the user's Windows:\n"
+        f"Here are lists of all programs on the user's computer:\n"
         f"All currently opened programs:\n{last_programs_list}\n\n"
         f"All installed programs (Registry):\n{installed_apps_registry}\n\n"
         f"All installed programs (Microsoft Store):\n{installed_apps_ms_store}\n\n"
@@ -818,6 +878,88 @@ def execute_action(action_json):
                 pyautogui.mouseUp()  # Ensure mouse is released
                 return False
 
+        def handle_mcp_call():
+            """Handle MCP tool invocation."""
+            try:
+                if call_mcp_tool is None:
+                    print_to_chat("MCP not available: install the 'mcp' Python package to enable MCP calls.")
+                    return False
+                det = action.get('detail', '').strip()
+                if not det:
+                    print_to_chat("Invalid mcp_call: detail is empty.")
+                    return False
+                # Enforce pure-JSON detail format (back-compat)
+                server_id = None
+                tool_name = None
+                tool_args = None
+                timeout_sec = 30.0
+
+                if not (det.startswith('{') and det.endswith('}')):
+                    print_to_chat("Invalid mcp_call: detail must be a JSON object string containing 'server' and 'tool'.")
+                    return False
+                try:
+                    parsed = json.loads(det)
+                except Exception:
+                    print_to_chat("Invalid mcp_call: detail must be valid JSON (object).")
+                    return False
+                if not isinstance(parsed, dict):
+                    print_to_chat("Invalid mcp_call: detail JSON must be an object.")
+                    return False
+
+                server_id = parsed.get('server')
+                tool_name = parsed.get('tool')
+                tool_args = parsed.get('args') if isinstance(parsed.get('args'), dict) else None
+                if 'timeout' in parsed:
+                    try:
+                        timeout_sec = float(parsed.get('timeout'))
+                    except Exception:
+                        pass
+
+                if not server_id or not tool_name:
+                    print_to_chat("Invalid mcp_call: require 'server' and 'tool' in detail JSON.")
+                    return False
+
+                settings = get_settings()
+                servers = settings.get('mcp_servers', []) if isinstance(settings, dict) else []
+                server_cfg = None
+                for s in servers:
+                    if (s.get('id') or s.get('name')) == server_id:
+                        server_cfg = s
+                        break
+                if not server_cfg:
+                    print_to_chat(f"MCP server not found in settings: {server_id}")
+                    return False
+
+                # Enforce allowlist if present
+                allowed = [t.get('name') for t in server_cfg.get('allowed_tools', []) if isinstance(t, dict) and t.get('name')]
+                if allowed and tool_name not in allowed:
+                    print_to_chat(f"MCP tool '{tool_name}' is not in the allowlist for server '{server_id}'. Allowed: {', '.join(allowed)}")
+                    return False
+
+                # Extract stdio fields server needs (back-compat)
+                server_exec = {
+                    'command': server_cfg.get('command', ''),
+                    'args': server_cfg.get('args') or [],
+                    'env': server_cfg.get('env') or None,
+                }
+
+                res_text, _raw = call_mcp_tool(server_exec, tool_name, tool_args or {}, timeout=timeout_sec)
+                brief = (res_text or '').strip()
+                try:
+                    print_to_chat(f"[MCP:{server_id}.{tool_name}]\n{brief}")
+                except Exception:
+                    pass
+                # Record into recent results for prompt context (full)
+                try:
+                    ts = datetime.now().strftime('%H:%M:%S')
+                    mcp_recent_results.append(f"{ts} {server_id}.{tool_name}: {brief}")
+                except Exception:
+                    pass
+                return True
+            except Exception as e:
+                print_to_chat(f"Error during MCP call: {e}")
+                return False
+
         action_map = {
             "move_to": lambda: move_mouse(x, y) if x is not None and y is not None else False,
             "click": lambda: perform_mouse_action(x, y, "single", repeat) if x is not None and y is not None else False,
@@ -831,7 +973,8 @@ def execute_action(action_json):
             "open_app": handle_open_app,
             "time_sleep": lambda: repeat_action(lambda: time.sleep(float(action['detail']))) if action['detail'].isdigit() else 1,
             "execute_rpa_task": lambda: execute_rpa_task(action['detail'], repeat),
-            "assistant_task": lambda: handle_assistant_task(action['detail'], repeat)
+            "assistant_task": lambda: handle_assistant_task(action['detail'], repeat),
+            "mcp_call": handle_mcp_call
         }
 
         if action['act'] in action_map:
@@ -1127,6 +1270,50 @@ def create_web_action_context(executed_actions, browser_info, webpage_info):
 
     previous_actions = "\n".join(previous_actions_formatted) if previous_actions_formatted else ""
 
+    # Build MCP tool details and recent results for web assistant context
+    try:
+        settings = get_settings()
+        mcp_servers = settings.get("mcp_servers", []) if isinstance(settings, dict) else []
+    except Exception:
+        mcp_servers = []
+
+    mcp_details_lines = []
+    for s in mcp_servers:
+        sid = s.get("id") or s.get("name") or "(no-id)"
+        meta = mcp_discovered_tools_meta_cache.get(sid)
+        if not meta and _list_mcp_tools_sync is not None:
+            try:
+                cfg = {"command": s.get("command", ""), "args": s.get("args") or [], "env": s.get("env") or None}
+                if cfg["command"]:
+                    meta = _list_mcp_tools_sync(cfg, timeout=8.0)
+                    if isinstance(meta, list) and meta:
+                        mcp_discovered_tools_meta_cache[sid] = meta
+                        names = [t.get("name") for t in meta if isinstance(t, dict) and t.get("name")]
+                        if names:
+                            mcp_discovered_tools_cache[sid] = names
+            except Exception:
+                meta = None
+        mcp_details_lines.append(f"- {sid}:")
+        if meta:
+            for t in meta:
+                if isinstance(t, dict):
+                    name = t.get("name") or ""
+                    desc = t.get("description") or ""
+                    if name:
+                        mcp_details_lines.append(f"  - {name} — {desc}" if desc else f"  - {name}")
+        else:
+            tools_cfg = s.get("allowed_tools") or []
+            names = [t.get("name") if isinstance(t, dict) else str(t) for t in tools_cfg]
+            if names:
+                for nm in names:
+                    mcp_details_lines.append(f"  - {nm}")
+            else:
+                mcp_details_lines.append("  (no tools available)")
+    mcp_tools_details = "\n".join(mcp_details_lines) if mcp_details_lines else "(No MCP servers configured)"
+
+    recent = mcp_recent_results if isinstance(mcp_recent_results, list) else []
+    mcp_recent_results_formatted = "\n".join(recent) if recent else "(No recent MCP results)"
+
     return (
         f"You are an AI Agent that is capable of operating freely on browser by generating web actions in sequence to accomplish the user's goal."
         f"\nBased on the user's goal and the current webpage state:"
@@ -1168,6 +1355,10 @@ def create_web_action_context(executed_actions, browser_info, webpage_info):
         f"\n- execute_javascript: Execute a custom JavaScript code. The detail field should contain the JavaScript code to be executed."
         f"\n- wait: Wait for specified seconds. The detail field should contain the number of seconds."
         f"\n- wait_for_element: Wait for an element to be visible/available. The selector identifies the element."
+        f"\n- mcp_call: The server ID, tool name, optional args (object) and optional timeout (in seconds) of a MCP server. (Use this action to call a tool from a MCP server.)"
+        f"\nmcp_call action format: \"act\":\"mcp_call\", \"detail\":\"{{\"server\":\"<server_id>\",\"tool\":\"<tool_name>\",\"args\":<args_object>,\"timeout\":<timeout_sec>}}\" (args and timeout are optional)"
+        f"\n\nMCP servers and tools details:\n{mcp_tools_details}\n"
+        f"\nRecent MCP Results:\n{mcp_recent_results_formatted}\n"
         f"\n\nImportant Rules:"
         f"\n1. Always generate actions based on the current webpage state."
         f"\n2. When specifying selectors in your actions, use the exact CSS selectors from the 'Available page elements' list in the webpage information."
@@ -1391,6 +1582,62 @@ def execute_web_action(action_json, sb_driver, delay=1.0):
             script_result = sb_driver.execute_script(detail)
             if script_result:
                 result = str(script_result)
+
+        elif act_type == 'mcp_call':
+            try:
+                if call_mcp_tool is None:
+                    print_to_web_chat("MCP not available: install the 'mcp' Python package to enable MCP calls.")
+                    return False, None
+                det_str = (detail or '').strip()
+                if not det_str:
+                    print_to_web_chat("Invalid mcp_call: detail is empty.")
+                    return False, None
+                if not (det_str.startswith('{') and det_str.endswith('}')):
+                    print_to_web_chat("Invalid mcp_call: detail must be a JSON object string containing 'server' and 'tool'.")
+                    return False, None
+                try:
+                    parsed = json.loads(det_str)
+                except Exception:
+                    print_to_web_chat("Invalid mcp_call: detail must be valid JSON (object).")
+                    return False, None
+                if not isinstance(parsed, dict):
+                    print_to_web_chat("Invalid mcp_call: detail JSON must be an object.")
+                    return False, None
+                server_id = parsed.get('server')
+                tool_name = parsed.get('tool')
+                tool_args = parsed.get('args') if isinstance(parsed.get('args'), dict) else None
+                timeout_sec = float(parsed.get('timeout')) if 'timeout' in parsed else 30.0
+                if not server_id or not tool_name:
+                    print_to_web_chat("Invalid mcp_call: require 'server' and 'tool' in detail JSON.")
+                    return False, None
+                settings = get_settings()
+                servers = settings.get('mcp_servers', []) if isinstance(settings, dict) else []
+                server_cfg = None
+                for s in servers:
+                    sid = s.get('id') or s.get('name')
+                    if sid == server_id:
+                        server_cfg = s
+                        break
+                if not server_cfg:
+                    print_to_web_chat(f"Invalid mcp_call: server '{server_id}' not found in settings.")
+                    return False, None
+                server_exec = {
+                    'command': server_cfg.get('command', ''),
+                    'args': server_cfg.get('args') or [],
+                    'env': server_cfg.get('env') or None,
+                }
+                res_text, _raw = call_mcp_tool(server_exec, tool_name, tool_args or {}, timeout=timeout_sec)
+                brief = (res_text or '').strip()
+                print_to_web_chat(f"[MCP:{server_id}.{tool_name}]\n{brief}")
+                try:
+                    ts = datetime.now().strftime('%H:%M:%S')
+                    mcp_recent_results.append(f"{ts} {server_id}.{tool_name}: {brief}")
+                except Exception:
+                    pass
+                result = brief
+            except Exception as e:
+                print_to_web_chat(f"Error during MCP call: {e}")
+                return False, None
 
         else:
             print_to_web_chat(f"WARNING: Unrecognized action '{action['act']}'.")
@@ -1714,14 +1961,12 @@ def chat_create_session(agent_type: str, name: str | None = None) -> int:
     conn.commit(); conn.close()
     return session_id
 
-
 def chat_rename_session(session_id: int, new_name: str) -> None:
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
     now = datetime.now().isoformat(timespec='seconds')
     cursor.execute("UPDATE chat_sessions SET name=?, updated_at=? WHERE id=?", (new_name, now, session_id))
     conn.commit(); conn.close()
-
 
 def chat_delete_session(session_id: int) -> None:
     conn = sqlite3.connect(database_file)
@@ -1730,13 +1975,11 @@ def chat_delete_session(session_id: int) -> None:
     cursor.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
     conn.commit(); conn.close()
 
-
 def chat_clear_session_messages(session_id: int) -> None:
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
     conn.commit(); conn.close()
-
 
 def chat_list_sessions(agent_type: str) -> list[dict]:
     conn = sqlite3.connect(database_file)
@@ -1752,7 +1995,6 @@ def chat_list_sessions(agent_type: str) -> list[dict]:
         for r in rows
     ]
 
-
 def chat_add_message(session_id: int, role: str, content: str) -> None:
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
@@ -1763,7 +2005,6 @@ def chat_add_message(session_id: int, role: str, content: str) -> None:
     )
     cursor.execute("UPDATE chat_sessions SET updated_at=? WHERE id=?", (now, session_id))
     conn.commit(); conn.close()
-
 
 def chat_list_messages(session_id: int) -> list[dict]:
     conn = sqlite3.connect(database_file)

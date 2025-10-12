@@ -76,7 +76,8 @@ def load_settings():
         "web_action_delay": 1.5,
         "web_max_attempts": 20,
         "start_with_windows": False,
-        "mini_chat_opacity": 0.9
+        "mini_chat_opacity": 0.9,
+        "mcp_servers": []
     }
 
     try:
@@ -477,6 +478,138 @@ class SettingsDialog(QDialog):
         }
 
         # Make provider options widget
+        # MCP helpers
+        try:
+            from mcp_client import list_mcp_tools as _list_mcp_tools_sync
+        except Exception:
+            _list_mcp_tools_sync = None
+
+        def _server_display_text(s: dict) -> str:
+            sid = s.get("id") or s.get("name") or "(no-id)"
+            status = self._mcp_server_status.get(sid, "Unknown")
+            return f"{sid} — {status}"
+
+        def _populate_server_list():
+            self.mcp_server_list.clear()
+            for s in self._mcp_servers:
+                self.mcp_server_list.addItem(_server_display_text(s))
+
+        def _set_status(sid: str, text: str):
+            self._mcp_server_status[sid] = text
+
+        def _get_selected_server():
+            row = self.mcp_server_list.currentRow()
+            if row < 0 or row >= len(self._mcp_servers):
+                return None
+            return self._mcp_servers[row]
+
+        def _refresh_tools_view(sid: str):
+            self.mcp_tools_list.clear()
+            tools = self._mcp_server_tools.get(sid) or []
+            if not tools:
+                return
+            for t in tools:
+                name = t.get("name", "")
+                desc = t.get("description", "")
+                self.mcp_tools_list.addItem(f"{name} — {desc}")
+
+        def _update_list_item(row: int):
+            if 0 <= row < self.mcp_server_list.count():
+                s = self._mcp_servers[row]
+                self.mcp_server_list.item(row).setText(_server_display_text(s))
+
+        def _test_server(s: dict):
+            sid = s.get("id") or s.get("name") or "(no-id)"
+            cfg = {"command": s.get("command", ""), "args": s.get("args") or [], "env": s.get("env") or None}
+            if not cfg["command"]:
+                _set_status(sid, "Invalid: missing command")
+                return
+            if _list_mcp_tools_sync is None:
+                _set_status(sid, "MCP package not installed")
+                return
+            try:
+                tools = _list_mcp_tools_sync(cfg, timeout=20.0)
+                self._mcp_server_tools[sid] = tools
+                _set_status(sid, f"OK ({len(tools)} tools)")
+            except Exception as e:
+                _set_status(sid, f"Error: {str(e)[:80]}")
+
+        def _refresh_all():
+            import threading
+            try:
+                self.mcp_refresh_btn.setEnabled(False)
+            except Exception:
+                pass
+            def worker():
+                try:
+                    for idx, s in enumerate(self._mcp_servers):
+                        _test_server(s)
+                        QTimer.singleShot(0, lambda idx=idx: _update_list_item(idx))
+                    sel = _get_selected_server()
+                    if sel:
+                        sid = sel.get("id") or sel.get("name") or "(no-id)"
+                        status_text = self._mcp_server_status.get(sid, "Unknown")
+                        QTimer.singleShot(0, lambda: self.mcp_status_label.setText(status_text))
+                        QTimer.singleShot(0, lambda sid=sid: _refresh_tools_view(sid))
+                finally:
+                    QTimer.singleShot(0, lambda: self.mcp_refresh_btn.setEnabled(True))
+            threading.Thread(target=worker, daemon=True).start()
+
+        # Bind methods to instance for signal handlers
+        def _on_select(row: int):
+            if not (0 <= row < len(self._mcp_servers)):
+                self.mcp_status_label.setText("Select a server to see status and tools.")
+                self.mcp_tools_list.clear()
+                return
+            s = self._mcp_servers[row]
+            sid = s.get("id") or s.get("name") or "(no-id)"
+            status = self._mcp_server_status.get(sid, "Unknown")
+            # If unknown, test this server now
+            if status == "Unknown":
+                _test_server(s)
+                _update_list_item(row)
+                status = self._mcp_server_status.get(sid, status)
+            self.mcp_status_label.setText(status)
+            _refresh_tools_view(sid)
+
+        self._on_mcp_server_selected = _on_select
+        self._refresh_mcp_status_all = _refresh_all
+
+        def _edit_json_dialog(json_text: str) -> str | None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Edit MCP Servers JSON")
+            v = QVBoxLayout(dlg)
+            te = QTextEdit()
+            te.setPlainText(json_text)
+            v.addWidget(te)
+            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            v.addWidget(bb)
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            return te.toPlainText() if dlg.exec() == QDialog.Accepted else None
+
+        def _edit_json_clicked():
+            import json as _json
+            try:
+                text = _json.dumps(self._mcp_servers, indent=2)
+            except Exception:
+                text = "[]"
+            new_text = _edit_json_dialog(text)
+            if new_text is None:
+                return
+            try:
+                data = _json.loads(new_text)
+                if not isinstance(data, list):
+                    raise ValueError("mcp_servers must be a list")
+                self._mcp_servers = data
+                _populate_server_list()
+                self.mcp_status_label.setText("Servers updated. Click Refresh Status to test.")
+                self.mcp_tools_list.clear()
+            except Exception as e:
+                QMessageBox.warning(self, "Invalid MCP Servers", f"Couldn't parse JSON: {e}")
+
+        self._edit_mcp_servers_json = _edit_json_clicked
+
         def make_provider_options_widget(prefix: str):
             w = QWidget(); w.setObjectName(f"{prefix}_provider_opts")
             layout = QVBoxLayout(w)
@@ -787,6 +920,17 @@ class SettingsDialog(QDialog):
         web_layout.addStretch()
 
         right_layout.addWidget(web_group)
+
+        # Add startup option to right panel
+        startup_container = QWidget()
+        startup_layout = QHBoxLayout(startup_container)
+        startup_layout.addWidget(QLabel("Start with Windows:"))
+        self.startup_check = QCheckBox()
+        # Reflect actual registry state rather than only saved settings
+        self.startup_check.setChecked(is_startup_enabled())
+        startup_layout.addWidget(self.startup_check)
+        right_layout.addWidget(startup_container)
+
         # Mini Chat settings
         mini_group = QFrame()
         mini_group.setObjectName("settingsGroup")
@@ -801,6 +945,8 @@ class SettingsDialog(QDialog):
         self.mini_chat_opacity_slider.setValue(90)
         opacity_layout.addWidget(self.mini_chat_opacity_slider)
         mini_layout.addWidget(opacity_container)
+
+
 
         right_layout.addWidget(mini_group)
 
@@ -903,7 +1049,52 @@ class SettingsDialog(QDialog):
         # Load app list
         self.load_app_list()
 
+
+
         # Apply styling
+
+        # MCP Servers tab
+        mcp_tab = QWidget()
+        mcp_layout = QHBoxLayout(mcp_tab)
+
+        # Left: servers list and buttons
+        left_box = QVBoxLayout()
+        self.mcp_server_list = QListWidget()
+        self.mcp_server_list.setMinimumWidth(320)
+        left_box.addWidget(QLabel("Configured MCP Servers"))
+        left_box.addWidget(self.mcp_server_list)
+
+        btn_row = QHBoxLayout()
+        self.mcp_edit_json_btn = QPushButton("Edit Servers JSON…")
+        self.mcp_refresh_btn = QPushButton("Refresh Status")
+        btn_row.addWidget(self.mcp_edit_json_btn)
+        btn_row.addWidget(self.mcp_refresh_btn)
+        left_box.addLayout(btn_row)
+
+        mcp_layout.addLayout(left_box, 40)
+
+        # Right: status + tools
+        right_box = QVBoxLayout()
+        self.mcp_status_label = QLabel("Select a server to see status and tools.")
+        self.mcp_tools_list = QListWidget()
+        right_box.addWidget(QLabel("Server Status"))
+        right_box.addWidget(self.mcp_status_label)
+        right_box.addWidget(QLabel("Available Tools"))
+        right_box.addWidget(self.mcp_tools_list)
+        mcp_layout.addLayout(right_box, 60)
+
+        tab_widget.addTab(mcp_tab, "MCP Servers")
+
+        # MCP tab state
+        self._mcp_servers = []            # list of dicts (settings mcp_servers)
+        self._mcp_server_tools = {}       # id -> list of {name, description}
+        self._mcp_server_status = {}      # id -> str
+
+        # Wire signals
+        self.mcp_server_list.currentRowChanged.connect(self._on_mcp_server_selected)
+        self.mcp_refresh_btn.clicked.connect(self._refresh_mcp_status_all)
+        self.mcp_edit_json_btn.clicked.connect(self._edit_mcp_servers_json)
+
         self.setStyleSheet("""
             QFrame#settingsGroup {
                 background-color: #F5F5F5;
@@ -928,16 +1119,6 @@ class SettingsDialog(QDialog):
                 border-radius: 5px;
             }
         """)
-
-        # Add startup option to performance group
-        startup_container = QWidget()
-        startup_layout = QHBoxLayout(startup_container)
-        startup_layout.addWidget(QLabel("Start with Windows:"))
-        self.startup_check = QCheckBox()
-        # Reflect actual registry state rather than only saved settings
-        self.startup_check.setChecked(is_startup_enabled())
-        startup_layout.addWidget(self.startup_check)
-        performance_layout.addWidget(startup_container)
 
     def load_app_list(self):
         try:
@@ -982,6 +1163,8 @@ class SettingsDialog(QDialog):
             btn.setStyleSheet("")
         for btn in self.shortcuts_app_list.widget().findChildren(QPushButton):
             btn.setProperty("selected", False)
+
+
             btn.setStyleSheet("")
 
         # Select clicked button
@@ -2145,6 +2328,30 @@ class ModernChatInterface(QMainWindow):
         except Exception:
             pass
 
+
+        # Populate MCP Servers tab from settings
+        try:
+            dialog._mcp_servers = settings.get("mcp_servers", []) if isinstance(settings, dict) else []
+            # Reset status/tools caches
+            dialog._mcp_server_status = {}
+            dialog._mcp_server_tools = {}
+            # Populate list
+            dialog.mcp_server_list.clear()
+            for s in dialog._mcp_servers:
+                sid = s.get("id") or s.get("name") or "(no-id)"
+                dialog._mcp_server_status[sid] = "Unknown"
+                dialog.mcp_server_list.addItem(f"{sid} — Unknown")
+            dialog.mcp_status_label.setText("Select a server to see status and tools.")
+            dialog.mcp_tools_list.clear()
+            try:
+                dialog.mcp_status_label.setText("Testing all servers...")
+                QTimer.singleShot(0, dialog._refresh_mcp_status_all)
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
         # If dialog is accepted, save settings
         if dialog.exec() == QDialog.Accepted:
             # Collect provider-specific options
@@ -2160,6 +2367,10 @@ class ModernChatInterface(QMainWindow):
             llm_opts = collect_opts(dialog.llm_provider_opts_container)
             vis_opts = collect_opts(dialog.vision_provider_opts_container)
 
+
+            # MCP servers from tab state
+            mcp_servers = dialog._mcp_servers if hasattr(dialog, "_mcp_servers") else settings.get("mcp_servers", [])
+
             # Get settings from dialog
             new_settings = {
                 "llm_model": f"{dialog.llm_provider_combo.currentText()}/{dialog.llm_model_combo.currentText().strip()}",
@@ -2173,7 +2384,8 @@ class ModernChatInterface(QMainWindow):
                 "web_action_delay": dialog.web_action_delay_spin.value(),
                 "web_max_attempts": dialog.web_max_attempts_spin.value(),
                 "start_with_windows": dialog.startup_check.isChecked(),
-                "mini_chat_opacity": (dialog.mini_chat_opacity_slider.value() / 100.0) if hasattr(dialog, "mini_chat_opacity_slider") else settings.get("mini_chat_opacity", 0.9)
+                "mini_chat_opacity": (dialog.mini_chat_opacity_slider.value() / 100.0) if hasattr(dialog, "mini_chat_opacity_slider") else settings.get("mini_chat_opacity", 0.9),
+                "mcp_servers": mcp_servers
             }
 
             # Set API credentials

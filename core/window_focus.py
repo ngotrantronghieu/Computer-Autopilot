@@ -60,15 +60,22 @@ def get_open_windows():
                             "nvcontainer.exe", "NVDisplay.Container.exe"]
 
     windows = gw.getAllWindows()
-    print_to_chat(windows)
     open_windows_info = []
     for w in windows:
-        if (w.visible and not w.isMinimized and w.title and w.height > 100 and w.width > 100
-                and w.title not in excluded_titles):
+        # Include minimized windows for window selector feature
+        # Check if window is minimized - if so, skip size check
+        is_minimized = win32gui.IsIconic(w._hWnd) if hasattr(w, '_hWnd') else False
+
+        if (w.visible and w.title and w.title not in excluded_titles):
+            # For non-minimized windows, check size; for minimized, skip size check
+            if not is_minimized and (w.height <= 100 or w.width <= 100):
+                continue
+
             hwnd = w._hWnd
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             process = psutil.Process(pid)
             executable_name = process.name()
+
             if executable_name not in excluded_executables:
                 rect = win32gui.GetWindowRect(hwnd)
                 position = (rect[0], rect[1])

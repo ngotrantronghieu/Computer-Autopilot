@@ -17,6 +17,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 - Supports all Win32api applications including: Microsoft Edge, Chrome, Firefox, OperaGX, Discord, Telegram, Spotify
 - Configurable performance settings for both desktop and web automation
 - Minimizable to mini chat or mini control interface for better workflow
+- Model Context Protocol (MCP) integration for extensible tool calling
 
 
 # Key Features
@@ -65,6 +66,15 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
    - Performance tuning options
    - Windows startup option
 
+8. **Model Context Protocol (MCP) Support**:
+   - Connect to MCP servers via stdio transport
+   - Discover and call external tools dynamically
+   - Integrated MCP Servers management tab
+   - Automatic tool discovery and metadata caching
+   - Full MCP result history in assistant context
+   - Support for both main assistant and web agent
+   - Configure servers with custom environment variables
+
 
 # Technical Innovations
 1. **Natural Language Processing**: Advanced NLP for command interpretation
@@ -76,6 +86,7 @@ Computer Autopilot is an AI Agent capable of automating Windows using natural la
 7. **Web Automation**: Advanced browser interaction with element detection
 8. **Selector Extraction**: Robust CSS and XPath selector generation
 9. **Performance Optimization**: Configurable action delays and execution parameters
+10. **MCP Integration**: Extensible tool ecosystem via Model Context Protocol with stdio transport
 
 
 # Installation
@@ -115,7 +126,12 @@ python .\core\assistant.py
      - Maximum attempts
      - Web action delay
      - Web maximum attempts
-2. Optional: Use environment variables for API keys
+   - MCP Servers:
+     - Add/edit MCP server configurations
+     - Configure server commands, arguments, and environment variables
+     - Test server status and view available tools
+     - Automatic tool discovery and caching
+2. Optional: Use environment variables for API keys and MCP server credentials
 
 
 # Usage
@@ -152,7 +168,15 @@ python .\core\assistant.py
    - Continue interactions while saving screen space
    - Quick access to essential controls
 
-6. **Debug Mode**:
+6. **MCP Integration**:
+   - Configure MCP servers in Settings → MCP Servers tab
+   - Add server configurations with command, args, and environment variables
+   - Test server status and view available tools
+   - Use MCP tools in both main assistant and web agent via natural language
+   - Example: "Search the web for AI news using MCP"
+   - View full MCP call history in assistant context
+
+7. **Debug Mode**:
    - Run `driver.py` for debugging
    - Test individual functions: `fast_act()`, `assistant()`, `web_assistant()`
    - Monitor execution flow
@@ -167,5 +191,6 @@ python .\core\assistant.py
 
 # System Requirements
 - Windows Operating System
-- Python 3.x+
+- Python 3.x+ (64-bit)
 - Internet connection for LLM API access
+- Node.js/npx (optional, for MCP servers that require it)
