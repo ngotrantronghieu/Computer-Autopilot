@@ -41,9 +41,10 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton,
                               QTextEdit, QDialogButtonBox, QMessageBox, QSystemTrayIcon, QMenu,
                               QListWidget, QComboBox, QStackedWidget, QSpinBox,
                               QDoubleSpinBox, QListWidgetItem, QGroupBox, QTimeEdit,
-                              QDateEdit, QInputDialog, QGraphicsDropShadowEffect, QToolButton)
+                              QDateEdit, QInputDialog, QGraphicsDropShadowEffect, QToolButton,
+                              QProgressBar)
 from PySide6.QtCore import Qt, Signal, QObject, QEvent, QSize, Slot, QMetaObject, Q_ARG, QTime, QDate, QLocale, QDateTime, QLockFile, QTimer
-from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence, QAction, QColor
+from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence, QAction, QColor, QPixmap, QImage
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from voice import speaker, set_volume, set_subtitles
 from driver import (
@@ -53,15 +54,86 @@ from driver import (
     chat_clear_session_messages, chat_list_sessions, chat_add_message,
     chat_list_messages
 )
-from window_focus import activate_window_title
-from utils import set_app_instance, get_app_instance, print_to_chat, print_to_web_chat
+from window_focus import activate_window_title, bring_to_foreground, get_open_windows
+from utils import set_app_instance, get_app_instance, print_to_chat
 from core_api import set_llm_model, set_api_key, set_vision_llm_model, set_vision_api_key
 from langdetect import detect
 from tasks import save_task, delete_task, get_task, load_tasks
 from pynput import mouse, keyboard
 from datetime import datetime
+import win32gui
+import win32ui
+import win32con
+import win32api
 
 SETTINGS_FILE = "settings.json"
+
+def get_window_icon(hwnd):
+    """Extract icon from window handle and convert to QIcon"""
+    try:
+        # Try to get the icon from the window
+        icon_handle = win32gui.SendMessage(hwnd, win32con.WM_GETICON, win32con.ICON_SMALL, 0)
+        if not icon_handle:
+            icon_handle = win32gui.SendMessage(hwnd, win32con.WM_GETICON, win32con.ICON_BIG, 0)
+        if not icon_handle:
+            icon_handle = win32api.SendMessage(hwnd, win32con.WM_GETICON, win32con.ICON_SMALL2, 0)
+
+        if icon_handle:
+            # Create a QPixmap from the icon handle
+            try:
+                # Get icon info
+                hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+                hbmp = win32ui.CreateBitmap()
+                hbmp.CreateCompatibleBitmap(hdc, 16, 16)
+                hdc_mem = hdc.CreateCompatibleDC()
+                hdc_mem.SelectObject(hbmp)
+
+                # Draw icon to bitmap
+                win32gui.DrawIconEx(hdc_mem.GetHandleOutput(), 0, 0, icon_handle, 16, 16, 0, None, win32con.DI_NORMAL)
+
+                # Convert to QPixmap
+                bmpinfo = hbmp.GetInfo()
+                bmpstr = hbmp.GetBitmapBits(True)
+                img = QImage(bmpstr, bmpinfo['bmWidth'], bmpinfo['bmHeight'], QImage.Format_RGB32)
+                pixmap = QPixmap.fromImage(img)
+
+                # Cleanup
+                win32gui.DeleteObject(hbmp.GetHandle())
+                hdc_mem.DeleteDC()
+                hdc.DeleteDC()
+
+                return QIcon(pixmap)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Return default icon if extraction fails
+    return QIcon()
+
+def _load_mcp_servers_from_settings(settings_dict):
+    """Load MCP servers from settings - only supports new mcpServers object format"""
+    if "mcpServers" in settings_dict and isinstance(settings_dict["mcpServers"], dict):
+        # Convert object format to internal array format
+        result = []
+        for server_id, config in settings_dict["mcpServers"].items():
+            server_entry = {"id": server_id}
+            server_entry.update(config)
+            result.append(server_entry)
+        return result
+    return []
+
+def _save_mcp_servers_to_object(mcp_array):
+    """Convert internal array format to mcpServers object format for saving"""
+    servers_obj = {}
+    for server in mcp_array:
+        if isinstance(server, dict):
+            server_id = server.get("id") or server.get("name")
+            if server_id:
+                # Create config without the id field
+                config = {k: v for k, v in server.items() if k not in ["id", "name"]}
+                servers_obj[server_id] = config
+    return servers_obj
 
 def load_settings():
     default_settings = {
@@ -83,6 +155,10 @@ def load_settings():
     try:
         with open(SETTINGS_FILE, "r") as f:
             user_settings = json.load(f)
+
+            # Load MCP servers from new format only
+            user_settings["mcp_servers"] = _load_mcp_servers_from_settings(user_settings)
+
             # Merge with defaults
             for key in user_settings:
                 if key in default_settings:
@@ -484,18 +560,56 @@ class SettingsDialog(QDialog):
         except Exception:
             _list_mcp_tools_sync = None
 
+        def _get_status_icon(status: str) -> str:
+            """Get emoji icon for status"""
+            if status.startswith("OK"):
+                return "🟢"
+            elif status.startswith("Error") or status.startswith("Invalid"):
+                return "🔴"
+            elif status == "Testing...":
+                return "🟡"
+            elif status == "MCP package not installed":
+                return "🔴"
+            else:
+                return "⚪"
+
         def _server_display_text(s: dict) -> str:
             sid = s.get("id") or s.get("name") or "(no-id)"
             status = self._mcp_server_status.get(sid, "Unknown")
-            return f"{sid} — {status}"
+            icon = _get_status_icon(status)
+            return f"{icon} {sid} — {status}"
+
+        def _update_summary():
+            """Update the summary panel with server statistics"""
+            total = len(self._mcp_servers)
+            online = sum(1 for s in self._mcp_servers
+                        if self._mcp_server_status.get(s.get("id") or s.get("name") or "(no-id)", "").startswith("OK"))
+            offline = sum(1 for s in self._mcp_servers
+                         if self._mcp_server_status.get(s.get("id") or s.get("name") or "(no-id)", "").startswith("Error")
+                         or self._mcp_server_status.get(s.get("id") or s.get("name") or "(no-id)", "").startswith("Invalid"))
+            testing = sum(1 for s in self._mcp_servers
+                         if self._mcp_server_status.get(s.get("id") or s.get("name") or "(no-id)", "") == "Testing...")
+
+            self.mcp_total_label.setText(f"Total: {total}")
+            self.mcp_online_label.setText(f"🟢 Online: {online}")
+            self.mcp_offline_label.setText(f"🔴 Offline: {offline}")
+            self.mcp_testing_label.setText(f"🟡 Testing: {testing}")
+
+            if self._mcp_last_check_time:
+                from datetime import datetime
+                self.mcp_last_check_label.setText(f"Last check: {self._mcp_last_check_time.strftime('%H:%M:%S')}")
+            else:
+                self.mcp_last_check_label.setText("Last check: Never")
 
         def _populate_server_list():
             self.mcp_server_list.clear()
             for s in self._mcp_servers:
                 self.mcp_server_list.addItem(_server_display_text(s))
+            _update_summary()
 
         def _set_status(sid: str, text: str):
             self._mcp_server_status[sid] = text
+            _update_summary()
 
         def _get_selected_server():
             row = self.mcp_server_list.currentRow()
@@ -511,7 +625,8 @@ class SettingsDialog(QDialog):
             for t in tools:
                 name = t.get("name", "")
                 desc = t.get("description", "")
-                self.mcp_tools_list.addItem(f"{name} — {desc}")
+                item = QListWidgetItem(f"{name} — {desc}")
+                self.mcp_tools_list.addItem(item)
 
         def _update_list_item(row: int):
             if 0 <= row < self.mcp_server_list.count():
@@ -534,26 +649,110 @@ class SettingsDialog(QDialog):
             except Exception as e:
                 _set_status(sid, f"Error: {str(e)[:80]}")
 
+        @Slot()
+        def _do_final_update():
+            """Final UI update - must be called from main thread"""
+            try:
+                # Repopulate the entire list with updated statuses
+                _populate_server_list()
+
+                # Update progress
+                total = len(self._mcp_servers)
+                self.mcp_progress_bar.setValue(total)
+                self.mcp_progress_bar.setFormat("Complete!")
+
+                # Update summary
+                _update_summary()
+
+                # Update selected server details if one is selected
+                sel = _get_selected_server()
+                if sel:
+                    sid = sel.get("id") or sel.get("name") or "(no-id)"
+                    status = self._mcp_server_status.get(sid, "Unknown")
+
+                    # Build detailed status display
+                    icon = _get_status_icon(status)
+                    status_html = f"<b>{icon} {sid}</b><br/>"
+                    status_html += f"<b>Status:</b> {status}<br/>"
+                    status_html += f"<b>Command:</b> {sel.get('command', 'N/A')}<br/>"
+
+                    tools = self._mcp_server_tools.get(sid) or []
+                    status_html += f"<b>Tools:</b> {len(tools)}"
+
+                    self.mcp_status_label.setText(status_html)
+
+                    # Apply color to status frame based on status
+                    if status.startswith("OK"):
+                        self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #E8F5E9; border: 2px solid #4CAF50; border-radius: 5px; padding: 10px; }")
+                    elif status.startswith("Error") or status.startswith("Invalid"):
+                        self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #FFEBEE; border: 2px solid #F44336; border-radius: 5px; padding: 10px; }")
+                    elif status == "Testing...":
+                        self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #FFF3E0; border: 2px solid #FF9800; border-radius: 5px; padding: 10px; }")
+                    else:
+                        self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #F5F5F5; border: 2px solid #9E9E9E; border-radius: 5px; padding: 10px; }")
+
+                    _refresh_tools_view(sid)
+
+                # Re-enable button and hide progress bar after showing "Complete!"
+                self.mcp_refresh_btn.setEnabled(True)
+                QTimer.singleShot(2000, lambda: self.mcp_progress_bar.setVisible(False))
+            except Exception as e:
+                print(f"Error in final UI update: {e}")
+                import traceback
+                traceback.print_exc()
+                self.mcp_refresh_btn.setEnabled(True)
+
+        # Store as instance method so it can be invoked
+        self._do_mcp_final_update = _do_final_update
+
         def _refresh_all():
             import threading
+            from datetime import datetime
+
             try:
                 self.mcp_refresh_btn.setEnabled(False)
+                self.mcp_progress_bar.setVisible(True)
+                self.mcp_progress_bar.setMaximum(len(self._mcp_servers))
+                self.mcp_progress_bar.setValue(0)
+                self.mcp_progress_bar.setFormat("Checking Status...")
             except Exception:
                 pass
+
+            # Set all servers to "Testing..." status
+            for s in self._mcp_servers:
+                sid = s.get("id") or s.get("name") or "(no-id)"
+                _set_status(sid, "Testing...")
+            _populate_server_list()
+
+            # Create a timer to check when worker is done
+            self._mcp_refresh_done = False
+
+            def check_done():
+                if self._mcp_refresh_done:
+                    _do_final_update()
+                else:
+                    QTimer.singleShot(100, check_done)
+
             def worker():
                 try:
-                    for idx, s in enumerate(self._mcp_servers):
+                    # Test all servers (this happens in background thread)
+                    for s in self._mcp_servers:
                         _test_server(s)
-                        QTimer.singleShot(0, lambda idx=idx: _update_list_item(idx))
-                    sel = _get_selected_server()
-                    if sel:
-                        sid = sel.get("id") or sel.get("name") or "(no-id)"
-                        status_text = self._mcp_server_status.get(sid, "Unknown")
-                        QTimer.singleShot(0, lambda: self.mcp_status_label.setText(status_text))
-                        QTimer.singleShot(0, lambda sid=sid: _refresh_tools_view(sid))
-                finally:
-                    QTimer.singleShot(0, lambda: self.mcp_refresh_btn.setEnabled(True))
+
+                    # Update timestamp
+                    self._mcp_last_check_time = datetime.now()
+
+                    # Signal that we're done
+                    self._mcp_refresh_done = True
+
+                except Exception as e:
+                    print(f"Error in MCP refresh worker: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self._mcp_refresh_done = True
+
             threading.Thread(target=worker, daemon=True).start()
+            QTimer.singleShot(100, check_done)
 
         # Bind methods to instance for signal handlers
         def _on_select(row: int):
@@ -564,12 +763,36 @@ class SettingsDialog(QDialog):
             s = self._mcp_servers[row]
             sid = s.get("id") or s.get("name") or "(no-id)"
             status = self._mcp_server_status.get(sid, "Unknown")
+
             # If unknown, test this server now
             if status == "Unknown":
+                _set_status(sid, "Testing...")
+                _update_list_item(row)
                 _test_server(s)
                 _update_list_item(row)
                 status = self._mcp_server_status.get(sid, status)
-            self.mcp_status_label.setText(status)
+
+            # Build detailed status display
+            icon = _get_status_icon(status)
+            status_html = f"<b>{icon} {sid}</b><br/>"
+            status_html += f"<b>Status:</b> {status}<br/>"
+            status_html += f"<b>Command:</b> {s.get('command', 'N/A')}<br/>"
+
+            tools = self._mcp_server_tools.get(sid) or []
+            status_html += f"<b>Tools:</b> {len(tools)}"
+
+            self.mcp_status_label.setText(status_html)
+
+            # Apply color to status frame based on status
+            if status.startswith("OK"):
+                self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #E8F5E9; border: 2px solid #4CAF50; border-radius: 5px; padding: 10px; }")
+            elif status.startswith("Error") or status.startswith("Invalid"):
+                self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #FFEBEE; border: 2px solid #F44336; border-radius: 5px; padding: 10px; }")
+            elif status == "Testing...":
+                self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #FFF3E0; border: 2px solid #FF9800; border-radius: 5px; padding: 10px; }")
+            else:
+                self.mcp_status_frame.setStyleSheet("QFrame#mcpStatusFrame { background-color: #F5F5F5; border: 2px solid #9E9E9E; border-radius: 5px; padding: 10px; }")
+
             _refresh_tools_view(sid)
 
         self._on_mcp_server_selected = _on_select
@@ -591,17 +814,24 @@ class SettingsDialog(QDialog):
         def _edit_json_clicked():
             import json as _json
             try:
-                text = _json.dumps(self._mcp_servers, indent=2)
+                # Convert current servers to new object format for editing
+                servers_obj = _save_mcp_servers_to_object(self._mcp_servers)
+                mcp_data = {"mcpServers": servers_obj}
+                text = _json.dumps(mcp_data, indent=2)
             except Exception:
-                text = "[]"
+                text = '{\n  "mcpServers": {}\n}'
             new_text = _edit_json_dialog(text)
             if new_text is None:
                 return
             try:
                 data = _json.loads(new_text)
-                if not isinstance(data, list):
-                    raise ValueError("mcp_servers must be a list")
-                self._mcp_servers = data
+                # Only accept new object format
+                if not isinstance(data, dict) or "mcpServers" not in data:
+                    raise ValueError("Invalid format: must be an object with 'mcpServers' key")
+
+                # Convert to internal array format
+                self._mcp_servers = _load_mcp_servers_from_settings(data)
+
                 _populate_server_list()
                 self.mcp_status_label.setText("Servers updated. Click Refresh Status to test.")
                 self.mcp_tools_list.clear()
@@ -1055,7 +1285,37 @@ class SettingsDialog(QDialog):
 
         # MCP Servers tab
         mcp_tab = QWidget()
-        mcp_layout = QHBoxLayout(mcp_tab)
+        mcp_main_layout = QVBoxLayout(mcp_tab)
+
+        # Summary panel at the top
+        summary_frame = QFrame()
+        summary_frame.setObjectName("mcpSummaryFrame")
+        summary_frame.setFrameShape(QFrame.StyledPanel)
+        summary_layout = QHBoxLayout(summary_frame)
+
+        self.mcp_total_label = QLabel("Total: 0")
+        self.mcp_online_label = QLabel("🟢 Online: 0")
+        self.mcp_offline_label = QLabel("🔴 Offline: 0")
+        self.mcp_testing_label = QLabel("🟡 Testing: 0")
+        self.mcp_last_check_label = QLabel("Last check: Never")
+
+        summary_layout.addWidget(self.mcp_total_label)
+        summary_layout.addWidget(self.mcp_online_label)
+        summary_layout.addWidget(self.mcp_offline_label)
+        summary_layout.addWidget(self.mcp_testing_label)
+        summary_layout.addStretch()
+        summary_layout.addWidget(self.mcp_last_check_label)
+
+        mcp_main_layout.addWidget(summary_frame)
+
+        # Progress bar for testing
+        self.mcp_progress_bar = QProgressBar()
+        self.mcp_progress_bar.setVisible(False)
+        self.mcp_progress_bar.setTextVisible(True)
+        mcp_main_layout.addWidget(self.mcp_progress_bar)
+
+        # Main content area
+        mcp_layout = QHBoxLayout()
 
         # Left: servers list and buttons
         left_box = QVBoxLayout()
@@ -1066,7 +1326,7 @@ class SettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         self.mcp_edit_json_btn = QPushButton("Edit Servers JSON…")
-        self.mcp_refresh_btn = QPushButton("Refresh Status")
+        self.mcp_refresh_btn = QPushButton("🔄 Refresh Status")
         btn_row.addWidget(self.mcp_edit_json_btn)
         btn_row.addWidget(self.mcp_refresh_btn)
         left_box.addLayout(btn_row)
@@ -1075,13 +1335,28 @@ class SettingsDialog(QDialog):
 
         # Right: status + tools
         right_box = QVBoxLayout()
+
+        # Status display frame
+        self.mcp_status_frame = QFrame()
+        self.mcp_status_frame.setObjectName("mcpStatusFrame")
+        self.mcp_status_frame.setFrameShape(QFrame.StyledPanel)
+        status_frame_layout = QVBoxLayout(self.mcp_status_frame)
         self.mcp_status_label = QLabel("Select a server to see status and tools.")
-        self.mcp_tools_list = QListWidget()
+        self.mcp_status_label.setWordWrap(True)
+        status_frame_layout.addWidget(self.mcp_status_label)
+
         right_box.addWidget(QLabel("Server Status"))
-        right_box.addWidget(self.mcp_status_label)
+        right_box.addWidget(self.mcp_status_frame)
         right_box.addWidget(QLabel("Available Tools"))
+
+        self.mcp_tools_list = QListWidget()
+        self.mcp_tools_list.setWordWrap(True)
+        self.mcp_tools_list.setTextElideMode(Qt.ElideNone)
+        self.mcp_tools_list.setResizeMode(QListWidget.Adjust)
         right_box.addWidget(self.mcp_tools_list)
         mcp_layout.addLayout(right_box, 60)
+
+        mcp_main_layout.addLayout(mcp_layout)
 
         tab_widget.addTab(mcp_tab, "MCP Servers")
 
@@ -1089,6 +1364,7 @@ class SettingsDialog(QDialog):
         self._mcp_servers = []            # list of dicts (settings mcp_servers)
         self._mcp_server_tools = {}       # id -> list of {name, description}
         self._mcp_server_status = {}      # id -> str
+        self._mcp_last_check_time = None  # timestamp of last check
 
         # Wire signals
         self.mcp_server_list.currentRowChanged.connect(self._on_mcp_server_selected)
@@ -1101,6 +1377,35 @@ class SettingsDialog(QDialog):
                 border-radius: 10px;
                 padding: 15px;
                 margin: 5px;
+            }
+            QFrame#mcpSummaryFrame {
+                background-color: #E3F2FD;
+                border: 2px solid #2196F3;
+                border-radius: 8px;
+                padding: 10px;
+                margin: 5px;
+            }
+            QFrame#mcpSummaryFrame QLabel {
+                font-weight: bold;
+                font-size: 11pt;
+                margin: 0px 10px;
+            }
+            QFrame#mcpStatusFrame {
+                background-color: #F5F5F5;
+                border: 2px solid #CCCCCC;
+                border-radius: 5px;
+                padding: 10px;
+                min-height: 80px;
+            }
+            QProgressBar {
+                border: 2px solid #CCCCCC;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #F5F5F5;
+            }
+            QProgressBar::chunk {
+                background-color: #2196F3;
+                border-radius: 3px;
             }
             QSpinBox, QDoubleSpinBox {
                 min-width: 100px;
@@ -1523,6 +1828,51 @@ class ModernChatInterface(QMainWindow):
         # Input area
         input_container = QWidget()
         input_layout = QHBoxLayout(input_container)
+
+        # Window selector dropdown
+        self.window_selector = QComboBox()
+        self.window_selector.setMinimumWidth(200)
+        self.window_selector.setMaximumWidth(250)
+        self.window_selector.setMinimumHeight(40)
+        self.window_selector.setToolTip("Select target window for assistant")
+        self.window_selector.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #CCCCCC;
+                border-radius: 5px;
+                padding: 5px;
+                background-color: white;
+            }
+            QComboBox:hover {
+                border: 1px solid #2196F3;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid #666;
+                margin-right: 5px;
+            }
+        """)
+
+        # Populate with initial "Auto-detect" option
+        self.window_selector.addItem("🎯 Auto-detect", None)
+        self.selected_window_hwnd = None
+        self.selected_window_title = None
+
+        # Connect signals
+        # Use showPopup override for better refresh trigger
+        original_showPopup = self.window_selector.showPopup
+        def showPopup_with_refresh():
+            self.refresh_window_list()
+            original_showPopup()
+        self.window_selector.showPopup = showPopup_with_refresh
+
+        self.window_selector.currentIndexChanged.connect(self.on_window_selected)
+
+        input_layout.addWidget(self.window_selector)
 
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Type the task you want to perform...")
@@ -2022,6 +2372,133 @@ class ModernChatInterface(QMainWindow):
                 if speak:
                     speaker(result)
 
+    def refresh_window_list(self):
+        """Refresh the list of available windows in the dropdown"""
+        try:
+            # Store current selection
+            current_index = self.window_selector.currentIndex()
+            current_data = self.window_selector.currentData()
+
+            # Clear existing items except "Auto-detect"
+            self.window_selector.blockSignals(True)
+            self.window_selector.clear()
+
+            # Add "Auto-detect" option
+            self.window_selector.addItem("🎯 Auto-detect", None)
+
+            # Get all open windows using get_open_windows() which has better filtering
+            windows = get_open_windows()
+
+            # Add each window to the dropdown
+            for window_info in windows:
+                if len(window_info) >= 4:
+                    title, position, size, executable = window_info[:4]
+
+                    # Try to get window handle for icon extraction
+                    try:
+                        # Find hwnd by title
+                        hwnd = win32gui.FindWindow(None, title)
+                        if hwnd:
+                            # Check if window is minimized
+                            is_minimized = win32gui.IsIconic(hwnd)
+
+                            icon = get_window_icon(hwnd)
+
+                            # Add minimized indicator if window is minimized
+                            if is_minimized:
+                                display_text = f"{title[:37]}... [Minimized]" if len(title) > 37 else f"{title} [Minimized]"
+                            else:
+                                display_text = f"{title[:40]}..." if len(title) > 40 else f"{title}"
+
+                            # Store hwnd and title as item data
+                            self.window_selector.addItem(icon, display_text, (hwnd, title))
+                        else:
+                            # Fallback without icon
+                            display_text = f"{title[:40]}..." if len(title) > 40 else f"{title}"
+                            self.window_selector.addItem(display_text, (None, title))
+                    except Exception as e:
+                        # Fallback without icon
+                        display_text = f"{title[:40]}..." if len(title) > 40 else f"{title}"
+                        self.window_selector.addItem(display_text, (None, title))
+
+            # Restore previous selection if it still exists
+            if current_data is not None:
+                for i in range(self.window_selector.count()):
+                    if self.window_selector.itemData(i) == current_data:
+                        self.window_selector.setCurrentIndex(i)
+                        break
+            else:
+                self.window_selector.setCurrentIndex(0)
+
+            self.window_selector.blockSignals(False)
+
+        except Exception as e:
+            print(f"Error refreshing window list: {e}")
+
+    def on_window_selected(self, index):
+        """Handle window selection from dropdown"""
+        try:
+            data = self.window_selector.itemData(index)
+
+            if data is None:
+                # Auto-detect selected
+                self.selected_window_hwnd = None
+                self.selected_window_title = None
+                # Update styling to show auto-detect mode
+                self.window_selector.setStyleSheet("""
+                    QComboBox {
+                        border: 1px solid #CCCCCC;
+                        border-radius: 5px;
+                        padding: 5px;
+                        background-color: white;
+                    }
+                    QComboBox:hover {
+                        border: 1px solid #2196F3;
+                    }
+                    QComboBox::drop-down {
+                        border: none;
+                    }
+                    QComboBox::down-arrow {
+                        image: none;
+                        border-left: 4px solid transparent;
+                        border-right: 4px solid transparent;
+                        border-top: 6px solid #666;
+                        margin-right: 5px;
+                    }
+                """)
+            else:
+                # Specific window selected
+                hwnd, title = data
+                self.selected_window_hwnd = hwnd
+                self.selected_window_title = title
+                # Update styling to show specific window selected
+                self.window_selector.setStyleSheet("""
+                    QComboBox {
+                        border: 2px solid #4CAF50;
+                        border-radius: 5px;
+                        padding: 5px;
+                        background-color: #E8F5E9;
+                    }
+                    QComboBox:hover {
+                        border: 2px solid #45a049;
+                    }
+                    QComboBox::drop-down {
+                        border: none;
+                    }
+                    QComboBox::down-arrow {
+                        image: none;
+                        border-left: 4px solid transparent;
+                        border-right: 4px solid transparent;
+                        border-top: 6px solid #666;
+                        margin-right: 5px;
+                    }
+                """)
+
+        except Exception as e:
+            print(f"Error selecting window: {e}")
+            self.selected_window_hwnd = None
+            self.selected_window_title = None
+
     def handle_pause_resume(self):
         """Handle pause/resume button click"""
         if self.paused_execution:
@@ -2080,6 +2557,15 @@ class ModernChatInterface(QMainWindow):
                     # Store goal for potential pause/resume
                     self.paused_goal = message
                     self.paused_actions = []
+
+                # Focus on selected window if specified
+                if self.selected_window_hwnd and self.selected_window_title:
+                    try:
+                        bring_to_foreground(self.selected_window_hwnd)
+                        time.sleep(0.3)  # Brief delay to ensure window is focused
+                        print_to_chat(f"Focused on window: {self.selected_window_title}", is_user=False)
+                    except Exception as e:
+                        print_to_chat(f"Warning: Could not focus on selected window: {e}", is_user=False)
 
                 message_lower = message.lower()
 
@@ -2332,20 +2818,33 @@ class ModernChatInterface(QMainWindow):
         # Populate MCP Servers tab from settings
         try:
             dialog._mcp_servers = settings.get("mcp_servers", []) if isinstance(settings, dict) else []
-            # Reset status/tools caches
+            # Reset status/tools caches and timestamp
             dialog._mcp_server_status = {}
             dialog._mcp_server_tools = {}
-            # Populate list
+            dialog._mcp_last_check_time = None
+
+            # Populate list with initial "Unknown" status
             dialog.mcp_server_list.clear()
             for s in dialog._mcp_servers:
                 sid = s.get("id") or s.get("name") or "(no-id)"
                 dialog._mcp_server_status[sid] = "Unknown"
-                dialog.mcp_server_list.addItem(f"{sid} — Unknown")
+                # Use the display text function for consistent formatting
+                dialog.mcp_server_list.addItem(f"⚪ {sid} — Unknown")
+
             dialog.mcp_status_label.setText("Select a server to see status and tools.")
             dialog.mcp_tools_list.clear()
+
+            # Initialize summary panel
+            total = len(dialog._mcp_servers)
+            dialog.mcp_total_label.setText(f"Total: {total}")
+            dialog.mcp_online_label.setText("🟢 Online: 0")
+            dialog.mcp_offline_label.setText("🔴 Offline: 0")
+            dialog.mcp_testing_label.setText("🟡 Testing: 0")
+            dialog.mcp_last_check_label.setText("Last check: Never")
+
+            # Automatically start testing all servers
             try:
-                dialog.mcp_status_label.setText("Testing all servers...")
-                QTimer.singleShot(0, dialog._refresh_mcp_status_all)
+                QTimer.singleShot(100, dialog._refresh_mcp_status_all)
             except Exception:
                 pass
 
@@ -2399,8 +2898,15 @@ class ModernChatInterface(QMainWindow):
 
             # Save settings to file
             try:
+                # Convert MCP servers to new object format for saving
+                settings_to_save = new_settings.copy()
+                if "mcp_servers" in settings_to_save:
+                    settings_to_save["mcpServers"] = _save_mcp_servers_to_object(settings_to_save["mcp_servers"])
+                    # Remove internal mcp_servers array
+                    del settings_to_save["mcp_servers"]
+
                 with open(SETTINGS_FILE, "w") as f:
-                    json.dump(new_settings, f, indent=2)
+                    json.dump(settings_to_save, f, indent=2)
             except Exception as e:
                 QMessageBox.warning(
                     self,
@@ -2487,13 +2993,14 @@ class ModernChatInterface(QMainWindow):
             dt_str = _format_session_timestamp(sess.get('created_at'))
             label = f"{label_name} — {dt_str}" if dt_str else label_name
             self.desktop_session_combo.addItem(label, sess['id'])
-        self.desktop_session_combo.blockSignals(False)
         # Select current
         if select_id is not None:
             for i in range(self.desktop_session_combo.count()):
                 if self.desktop_session_combo.itemData(i) == select_id:
                     self.desktop_session_combo.setCurrentIndex(i)
                     break
+        # Unblock signals AFTER setting current index to prevent recursion
+        self.desktop_session_combo.blockSignals(False)
 
     def _delete_desktop_session_if_empty(self, session_id: int) -> bool:
         """Delete the given desktop session if it has no messages. Returns True if deleted."""
@@ -2509,18 +3016,26 @@ class ModernChatInterface(QMainWindow):
             return False
 
     def _on_desktop_session_changed(self, index):
+        # Recursion guard: prevent re-entry during refresh operations
+        if getattr(self, '_in_desktop_session_change', False):
+            return
         if index < 0:
             return
         new_id = self.desktop_session_combo.itemData(index)
         if not new_id or new_id == self.desktop_current_session_id:
             return
-        old_id = getattr(self, 'desktop_current_session_id', None)
-        if old_id and old_id != new_id:
-            if self._delete_desktop_session_if_empty(old_id):
-                # Refresh list to drop the deleted session
-                self._refresh_desktop_sessions(select_id=new_id)
-        self.desktop_current_session_id = new_id
-        self._load_desktop_session_messages(new_id)
+
+        self._in_desktop_session_change = True
+        try:
+            old_id = getattr(self, 'desktop_current_session_id', None)
+            if old_id and old_id != new_id:
+                if self._delete_desktop_session_if_empty(old_id):
+                    # Refresh list to drop the deleted session
+                    self._refresh_desktop_sessions(select_id=new_id)
+            self.desktop_current_session_id = new_id
+            self._load_desktop_session_messages(new_id)
+        finally:
+            self._in_desktop_session_change = False
 
     def _on_desktop_new_session(self):
         # If current is empty, remove it so empty sessions are not saved
@@ -3245,12 +3760,14 @@ class WebAgentTab(QWidget):
             dt_str = _format_session_timestamp(sess.get('created_at'))
             label = f"{label_name} — {dt_str}" if dt_str else label_name
             self.web_session_combo.addItem(label, sess['id'])
-        self.web_session_combo.blockSignals(False)
+        # Select current
         if select_id is not None:
             for i in range(self.web_session_combo.count()):
                 if self.web_session_combo.itemData(i) == select_id:
                     self.web_session_combo.setCurrentIndex(i)
                     break
+        # Unblock signals AFTER setting current index to prevent recursion
+        self.web_session_combo.blockSignals(False)
 
     def _delete_web_session_if_empty(self, session_id: int) -> bool:
         try:
@@ -3265,17 +3782,25 @@ class WebAgentTab(QWidget):
             return False
 
     def _on_web_session_changed(self, index):
+        # Recursion guard: prevent re-entry during refresh operations
+        if getattr(self, '_in_web_session_change', False):
+            return
         if index < 0:
             return
         new_id = self.web_session_combo.itemData(index)
         if not new_id or new_id == self.web_current_session_id:
             return
-        old_id = getattr(self, 'web_current_session_id', None)
-        if old_id and old_id != new_id:
-            if self._delete_web_session_if_empty(old_id):
-                self._refresh_web_sessions(select_id=new_id)
-        self.web_current_session_id = new_id
-        self._load_web_session_messages(new_id)
+
+        self._in_web_session_change = True
+        try:
+            old_id = getattr(self, 'web_current_session_id', None)
+            if old_id and old_id != new_id:
+                if self._delete_web_session_if_empty(old_id):
+                    self._refresh_web_sessions(select_id=new_id)
+            self.web_current_session_id = new_id
+            self._load_web_session_messages(new_id)
+        finally:
+            self._in_web_session_change = False
 
     def _on_web_new_session(self):
         curr_id = getattr(self, 'web_current_session_id', None)
